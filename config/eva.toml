@@ -1,0 +1,21 @@
+﻿[server]
+host = "0.0.0.0"
+port = 8765
+
+[security]
+pairing_token = "eva-local"
+
+[models]
+provider = "hybrid"
+ollama_url = "http://127.0.0.1:11434"
+ollama_model = "qwen2.5:1.5b"
+fast_model = "qwen2.5:1.5b"
+deep_model = "mistral:7b"
+smart_enabled = true
+smart_provider = "gemini"
+smart_model = "gemini-2.5-flash"
+
+[features]
+screen_capture = true
+voice_enabled = false
+camera_always_on = false

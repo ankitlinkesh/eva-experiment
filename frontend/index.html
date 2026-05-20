@@ -1,0 +1,135 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Eva Agent</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="aurora" aria-hidden="true"></div>
+    <div class="gridwash" aria-hidden="true"></div>
+
+    <main class="deck">
+      <header class="topbar glass">
+        <div class="brand-lockup">
+          <span class="brand-mark">E</span>
+          <div>
+            <p class="eyebrow">Eva Command Nexus</p>
+            <h1>Desktop Intelligence Layer</h1>
+          </div>
+        </div>
+        <div class="top-telemetry">
+          <div>
+            <span>Uplink</span>
+            <strong id="uplinkStatus">Syncing</strong>
+          </div>
+          <div>
+            <span>Model</span>
+            <strong id="modelName">Checking</strong>
+          </div>
+          <div>
+            <span>Local Time</span>
+            <strong id="localTime">--:--</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="identity glass panel-glow">
+        <div class="section-head">
+          <p class="eyebrow">Agent State</p>
+          <p class="status-pill" id="statusPill">Booting</p>
+        </div>
+        <div class="eva-title">
+          <span>Eva</span>
+          <small>v0.1 local</small>
+        </div>
+        <p class="soft">Private command layer for this laptop. Phone control, screen context, local memory, and voice modules are being built as separate systems.</p>
+        <div class="signal-stack" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
+      </section>
+
+      <section class="core glass">
+        <div class="reactor" aria-hidden="true">
+          <div class="ring ring-one"></div>
+          <div class="ring ring-two"></div>
+          <div class="ring ring-three"></div>
+          <div class="lens">
+            <div class="lens-inner"></div>
+          </div>
+          <div class="scanline"></div>
+        </div>
+
+        <div class="core-copy">
+          <p class="eyebrow">Live Reasoning Stream</p>
+          <h2>Ask, command, inspect.</h2>
+          <p>Eva answers through streamed local inference and bypasses the model for instant deterministic actions.</p>
+        </div>
+
+        <div class="quick-grid" aria-label="Quick commands">
+          <button type="button" class="quick-chip" data-prompt="status">System status</button>
+          <button type="button" class="quick-chip" data-prompt="show screen">Screen help</button>
+          <button type="button" class="quick-chip" data-prompt="open chrome">Open Chrome</button>
+          <button type="button" class="quick-chip" data-prompt="what can you do">Capabilities</button>
+        </div>
+
+        <div class="timeline" id="timeline">
+          <article class="message eva">
+            <span>Eva</span>
+            <p>I am online. Commands stream here. Screen capture only happens when you request it.</p>
+          </article>
+        </div>
+
+        <form class="composer" id="composer">
+          <div class="input-shell">
+            <span>//</span>
+            <input id="messageInput" autocomplete="off" placeholder="Type a command for Eva..." />
+          </div>
+          <button type="submit">Transmit</button>
+        </form>
+      </section>
+
+      <section class="intel glass panel-glow">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Visual Context</p>
+            <h3>Screen Bay</h3>
+          </div>
+          <span class="privacy-chip">On demand</span>
+        </div>
+        <p class="soft">Eva does not watch continuously. Press capture when you want the laptop screen mirrored to this control room.</p>
+        <button class="secondary" id="screenButton">Capture screen</button>
+        <div class="screen-frame">
+          <img id="screenImage" alt="Laptop screen preview appears here after capture">
+          <div id="screenEmpty" class="screen-empty">
+            <span></span>
+            <p>Awaiting visual request</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="system glass">
+        <p class="eyebrow">Modules</p>
+        <div class="metric">
+          <span>Voice</span>
+          <strong id="voiceStatus">Modular</strong>
+        </div>
+        <div class="metric">
+          <span>Camera</span>
+          <strong>Manual only</strong>
+        </div>
+        <div class="metric">
+          <span>Memory</span>
+          <strong>SQLite local</strong>
+        </div>
+        <div class="metric">
+          <span>Phone</span>
+          <strong>LAN ready</strong>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
+
