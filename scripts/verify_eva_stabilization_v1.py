@@ -183,6 +183,39 @@ def main() -> int:
         classification=chatgpt,
         reply=chatgpt_reply,
     )
+    if chatgpt_reply:
+        remember_answer_provenance(session_context, source=chatgpt_reply[1], tools=[str(chatgpt.get("suggested_route") or "")])
+    chatgpt_provenance = answer_provenance_status(session_context)
+    failures += emit(
+        "chatgpt_unavailable_provenance_honest",
+        "did not get an answer from ChatGPT in Chrome" in chatgpt_provenance
+        and "workflow is not available" in chatgpt_provenance
+        and "Tool used: chatgpt_in_chrome" not in chatgpt_provenance,
+        reply=chatgpt_provenance,
+    )
+
+    verify_failure = _local_tool_summary(
+        [
+            ToolExecutionResult(
+                tool="verify_browser_target",
+                ok=False,
+                result={
+                    "ok": False,
+                    "verified": False,
+                    "user_message": "I can't verify the YouTube results because the active Chrome tab is not YouTube. I can reopen the YouTube search if you want.",
+                    "internal_error": "active_target_mismatch",
+                },
+                error=None,
+            )
+        ]
+    )
+    failures += emit(
+        "verify_browser_target_failure_clean_user_message",
+        "verify_browser_target failed: None" not in verify_failure
+        and "active Chrome tab is not YouTube" in verify_failure
+        and not verify_failure.startswith("Done."),
+        reply=verify_failure,
+    )
 
     destructive = classify_capability_intent("delete my downloads", session_context)
     destructive_reply = _handle_capability_route("delete my downloads", destructive, session_context, None, "verify")

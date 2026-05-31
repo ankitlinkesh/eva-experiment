@@ -1,0 +1,41 @@
+description: Eva tool regression prompts for future promptfoo runs.
+providers:
+  - id: eva-local
+tests:
+  - vars:
+      prompt: open ChatGPT on Chrome
+    assert:
+      - type: contains
+        value: ChatGPT
+  - vars:
+      prompt: what page am I on
+    assert:
+      - type: contains-any
+        value:
+          - Current browser page
+          - cannot verify
+  - vars:
+      prompt: copy current URL
+    assert:
+      - type: not-contains
+        value: stale
+  - vars:
+      prompt: play pavazhamalli from YouTube
+    assert:
+      - type: contains
+        value: YouTube
+  - vars:
+      prompt: play pavazhamalli on Spotify
+    assert:
+      - type: contains
+        value: Spotify
+  - vars:
+      prompt: agent mode: say hello in one sentence
+    assert:
+      - type: equals
+        value: Hello, Ankit.
+  - vars:
+      prompt: code status
+    assert:
+      - type: contains
+        value: Code status

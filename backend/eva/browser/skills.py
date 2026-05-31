@@ -27,6 +27,49 @@ from .state import current_state
 from .web_apps import build_site_search_url, resolve_web_app
 
 
+def _verification_user_message(result: Any) -> str:
+    expected = getattr(result, "expected_target", {}) or {}
+    platform = str(expected.get("platform") or expected.get("domain") or "target").strip()
+    platform_name = platform or "target"
+    platform_lc = platform_name.lower()
+    query = " ".join(str(expected.get("query") or "").strip().split())
+    target_label = platform_name
+    if platform_lc == "youtube":
+        target_label = "YouTube"
+    elif platform_lc == "github":
+        target_label = "GitHub"
+    elif platform_lc in {"hugging face", "huggingface"}:
+        target_label = "Hugging Face"
+    elif platform_lc == "chatgpt":
+        target_label = "ChatGPT"
+
+    if getattr(result, "verified", False):
+        if target_label == "YouTube" and query and not expected.get("needs_activation"):
+            return f"Verified. The YouTube search results for {query} are open."
+        if query:
+            return f"Verified. The {target_label} target for {query} is open."
+        return f"Verified. The {target_label} target is open."
+
+    failure = str(getattr(result, "failure_reason", "") or "")
+    source = str(getattr(result, "source", "") or "")
+    stale = bool(getattr(result, "stale", False))
+    if stale or failure == "cache_only_target_unverified" or source == "cache":
+        if target_label == "YouTube" and query:
+            return f"I can't verify the YouTube results right now because I couldn't read the live browser page."
+        return f"I can't verify the {target_label} target right now because I couldn't read the live browser page."
+    if "active Chrome tab is Eva" in failure:
+        if target_label == "YouTube" and query:
+            return "I can't verify the YouTube results because the active Chrome tab is not YouTube. I can reopen the YouTube search if you want."
+        return f"I can't verify the {target_label} results because the active Chrome tab is not {target_label}. I can reopen the target page if you want."
+    if failure in {"active_target_mismatch", "target_query_unverified", "youtube_results_unverified", "youtube_activation_unverified"}:
+        if target_label == "YouTube" and query:
+            return "I can't verify the YouTube results because the active Chrome tab is not YouTube. I can reopen the YouTube search if you want."
+        return f"I couldn't verify the {target_label} target from the current browser page. I can reopen it if you want."
+    if target_label == "YouTube" and query:
+        return f"I couldn't verify the YouTube results for {query} right now."
+    return f"I couldn't verify the {target_label} target right now."
+
+
 def browser_status() -> dict[str, Any]:
     return get_browser_status()
 
@@ -247,6 +290,7 @@ def verify_browser_target(session_context: dict[str, Any] | None = None) -> dict
     context = get_current_task_context(session_context)
     observed = discover_current_url()
     result = verify_target(context, observed)
+    user_message = _verification_user_message(result)
     if context is not None:
         update_task_context(session_context, last_verification=result.as_dict(), last_observation=observed)
     return {
@@ -260,7 +304,9 @@ def verify_browser_target(session_context: dict[str, Any] | None = None) -> dict
         "suggested_repair": result.suggested_repair,
         "source": result.source,
         "stale": result.stale,
-        "message": result.evidence if result.verified else (result.failure_reason or result.evidence),
+        "user_message": user_message,
+        "message": user_message,
+        "internal_error": result.failure_reason,
         "ui_events": [
             {"type": "verifying_target", "expected_target": result.expected_target},
             {"type": "verification_passed" if result.verified else "verification_failed", "confidence": result.confidence},

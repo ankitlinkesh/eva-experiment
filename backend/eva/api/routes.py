@@ -474,9 +474,21 @@ def _local_tool_summary(results: list[ToolExecutionResult]) -> str:
                 else:
                     chunks.append(str(result.result))
         else:
-            chunks.append(f"{result.tool} failed: {result.error}")
+            if isinstance(result.result, dict):
+                message = str(
+                    result.result.get("user_message")
+                    or result.result.get("message")
+                    or result.result.get("summary")
+                    or ""
+                ).strip()
+                if message:
+                    chunks.append(message)
+                    continue
+            chunks.append(f"{result.tool} failed." if not result.error else f"{result.tool} failed: {result.error}")
     if len(chunks) == 1 and chunks[0].startswith(("Done,", "Copied ")):
         return chunks[0]
+    if chunks and chunks[0].startswith(("Verified.", "I can't", "I could not", "I couldn't")):
+        return " ".join(chunks)
     return "Done. " + " ".join(chunks)
 
 
@@ -627,6 +639,14 @@ def _handle_capability_route(
     if capability == "self_diagnostics":
         reply = get_eva_health_summary(settings.models if settings is not None else None)["text"]
         return reply, "capability:self_diagnostics"
+
+    if capability == "eva_v2_runtime":
+        from ..core.fast_commands import maybe_handle_fast_command
+
+        handled = maybe_handle_fast_command(message, ToolRegistry(), session_context)
+        if handled is not None:
+            return handled
+        return "Eva v2 runtime skeleton is installed but disabled by default.", "capability:eva_v2_runtime"
 
     if capability == "provider_diagnostics" and settings is not None:
         provider = str(classification.get("provider") or "")

@@ -41,6 +41,14 @@ CAPABILITIES: dict[str, Capability] = {
         example_intents=("what part of you is broken", "system health", "diagnose yourself"),
         route_type="deterministic",
     ),
+    "eva_v2_runtime": Capability(
+        name="eva_v2_runtime",
+        description="Report the optional Eva v2 runtime skeleton, specialist agents, guardrails, traces, vector memory, and automation adapter status.",
+        trigger_concepts=("eva v2", "runtime status", "agents status", "guardrails status", "vector memory", "traces status", "automation adapters"),
+        related_tools=("eva_v2_status", "agents_status", "guardrails_status", "vector_memory_status", "traces_status"),
+        example_intents=("eva v2 status", "agents status", "automation adapters status"),
+        route_type="deterministic",
+    ),
     "provider_diagnostics": Capability(
         name="provider_diagnostics",
         description="Inspect configured LLM providers, models, local soft caps, blocked providers, and last errors without exposing keys.",

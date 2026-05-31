@@ -168,6 +168,18 @@ def classify_capability_intent(message: str, context: dict | None = None) -> dic
     if not text:
         return _base_result(False, reason="empty_message")
 
+    if text in {
+        "eva v2 status",
+        "eva runtime status",
+        "eva v2 runtime status",
+        "agents status",
+        "guardrails status",
+        "vector memory status",
+        "traces status",
+        "automation adapters status",
+    }:
+        return _base_result(True, capability="eva_v2_runtime", confidence=0.95, reason="Eva v2 runtime status request.", suggested_route=text.replace(" ", "_"))
+
     correction = _remember_correction(text, context)
     followup = resolve_followup_reference(message, get_current_task_context(context))
     if followup:

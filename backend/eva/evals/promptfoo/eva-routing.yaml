@@ -1,0 +1,46 @@
+description: Eva routing regression prompts for future promptfoo runs.
+providers:
+  - id: eva-local
+    config:
+      route: local-manual
+tests:
+  - vars:
+      prompt: play pavazhamalli from YouTube
+    assert:
+      - type: contains
+        value: YouTube
+  - vars:
+      prompt: play pavazhamalli on Spotify
+    assert:
+      - type: contains
+        value: Spotify
+  - vars:
+      prompt: test OpenRouter API
+    assert:
+      - type: contains
+        value: OpenRouter
+  - vars:
+      prompt: permissions status
+    assert:
+      - type: contains
+        value: permission gate
+  - vars:
+      prompt: tools status
+    assert:
+      - type: contains
+        value: registered tool
+  - vars:
+      prompt: respond in tamil love
+    assert:
+      - type: not-contains
+        value: romantic
+  - vars:
+      prompt: ask ChatGPT on my Chrome for a concise business idea
+    assert:
+      - type: contains
+        value: ChatGPT
+  - vars:
+      prompt: play it now
+    assert:
+      - type: contains
+        value: remembered

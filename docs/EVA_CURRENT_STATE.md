@@ -7,6 +7,7 @@ This is a repo-local handoff for future Codex runs. Treat the working tree as ac
 ## Implemented Systems
 
 - Agentic v2: `backend/eva/agent/runner.py`, `backend/eva/agent/planner.py`, `backend/eva/agent/policies.py`, `backend/eva/agent/state.py`, `backend/eva/agent/task.py`, verified by `scripts/verify_agentic_v2.py` and `scripts/verify_agent_runner.py`.
+- Eva v2 Runtime Skeleton: optional, disabled-by-default scaffolding in `backend/eva/runtime/`, specialist agent shells in `backend/eva/agents/`, typed result/action schemas in `backend/eva/schemas/`, guardrail hooks in `backend/eva/guardrails/`, local trace hooks in `backend/eva/observability/`, vector-memory interfaces in `backend/eva/vector_memory/`, optional browser/desktop automation adapters in `backend/eva/browser_automation/` and `backend/eva/desktop_automation/`, and promptfoo-ready configs in `backend/eva/evals/promptfoo/`. Verified by `scripts/verify_eva_v2_runtime_skeleton.py`.
 - Laptop operator mode: deterministic command handling in `backend/eva/core/operator_commands.py` and `backend/eva/core/fast_commands.py`, with tools in `backend/eva/tools/registry.py`.
 - Desktop Agent Core: desktop observation/window/action helpers in `backend/eva/desktop/` and desktop tools in `backend/eva/tools/desktop.py`, verified by `scripts/verify_desktop_agent_core.py`.
 - Browser Agent Core: safe browser status, URL opening, page summaries, link extraction, and research save flow in `backend/eva/browser/`, verified by `scripts/verify_browser_agent_core.py`.
@@ -80,6 +81,7 @@ Important focused scripts:
 - `scripts/verify_rate_limits.py`
 - `scripts/verify_nvidia_nim_provider.py`
 - `scripts/verify_agentic_v2.py`
+- `scripts/verify_eva_v2_runtime_skeleton.py`
 - `scripts/verify_agent_runner.py`
 - `scripts/verify_operator_commands.py`
 - `scripts/verify_desktop_agent_core.py`
@@ -103,6 +105,18 @@ Important focused scripts:
 4. Agentic runner for multi-step agentic intents.
 5. Planner/tool execution through `ToolCallPlanner`, `ToolExecutor`, and `ToolRegistry`.
 6. LLM fallback through cloud/provider router and local Ollama fallback.
+
+Eva v2 runtime skeleton is installed around this flow but is not the default path. `EVA_V2_RUNTIME_ENABLED=false` keeps current Eva behavior active; v2 status commands are handled deterministically through `backend/eva/core/fast_commands.py`.
+
+## Eva v2 Skeleton Status Commands
+
+- `eva v2 status`
+- `eva runtime status`
+- `agents status`
+- `guardrails status`
+- `vector memory status`
+- `traces status`
+- `automation adapters status`
 
 ## Next Planned Stabilization Task
 

@@ -199,6 +199,97 @@ def _format_research_status(result: object, *, raw: bool = False) -> str:
     )
 
 
+def _format_eva_v2_status() -> str:
+    from ..runtime.feature_flags import eva_v2_runtime_status
+    from ..runtime.graph import is_langgraph_available
+
+    status = eva_v2_runtime_status()
+    flags = status.get("flags") if isinstance(status.get("flags"), dict) else {}
+    enabled = "enabled" if status.get("enabled") else "installed but disabled"
+    return "\n".join(
+        [
+            f"Eva v2 runtime status: {enabled}.",
+            "EVA_V2_RUNTIME_ENABLED=false, so the current Eva routing and Agentic v2 loop remain active by default."
+            if not status.get("enabled")
+            else "EVA_V2_RUNTIME_ENABLED=true, so safe demo requests may pass through the v2 skeleton.",
+            f"Optional graph: LangGraph {'available' if is_langgraph_available() else 'not installed or disabled'}; flag EVA_V2_LANGGRAPH_ENABLED={str(flags.get('langgraph_enabled', False)).lower()}.",
+            "Phase 1 scope: typed state/actions, specialist-agent selection, guardrail hooks, local traces, vector-memory interfaces, and optional automation adapters.",
+        ]
+    )
+
+
+def _format_agents_status() -> str:
+    from ..runtime.supervisor import supervisor_status
+
+    status = supervisor_status()
+    agents = status.get("agents") if isinstance(status.get("agents"), list) else []
+    lines = [f"Specialist agents status: {len(agents)} v2 skeleton agents are registered."]
+    for item in agents:
+        if isinstance(item, dict):
+            lines.append(f"- {item.get('name')}: {item.get('delegated_core')}")
+    lines.append("They propose/delegate through existing Eva systems; they do not replace the current loop yet.")
+    return "\n".join(lines)
+
+
+def _format_guardrails_status() -> str:
+    from ..guardrails.llm_guard_adapter import is_llm_guard_available
+    from ..runtime.feature_flags import get_v2_feature_flags
+
+    flags = get_v2_feature_flags()
+    available = is_llm_guard_available()
+    enabled = bool(flags.llm_guard_enabled and available)
+    return "\n".join(
+        [
+            f"Guardrails status: LLM Guard package is {'available' if available else 'not installed'}; adapter enabled: {enabled}.",
+            "Fallback guardrails are active for Phase 1: secret redaction, prompt-injection phrase detection, suspicious tool-call checks, and output-safety checks.",
+            "The Cloud Context Firewall and Permission Gate remain the authority for private local context and risky actions.",
+        ]
+    )
+
+
+def _format_vector_memory_status() -> str:
+    from ..vector_memory.retriever import vector_memory_status
+
+    status = vector_memory_status()
+    return "\n".join(
+        [
+            f"Vector memory status: interfaces installed, primary backend is {status.get('primary')}.",
+            f"Chroma enabled: {status.get('chroma', {}).get('enabled') if isinstance(status.get('chroma'), dict) else False}. Qdrant enabled: {status.get('qdrant', {}).get('enabled') if isinstance(status.get('qdrant'), dict) else False}.",
+            "Vector memory is disabled by default; Eva keeps using local SQLite memory/research retrieval unless explicitly configured.",
+        ]
+    )
+
+
+def _format_traces_status() -> str:
+    from ..observability.langfuse_adapter import langfuse_status
+    from ..observability.traces import traces_status
+
+    local = traces_status()
+    langfuse = langfuse_status()
+    return "\n".join(
+        [
+            f"Traces status: local trace store is {local.get('backend')} at {local.get('path')}.",
+            f"Langfuse enabled: {langfuse.get('enabled')} ({langfuse.get('message')}).",
+            "Trace payloads are redacted before local write; remote tracing is disabled unless explicitly configured later.",
+        ]
+    )
+
+
+def _format_automation_adapters_status() -> str:
+    from ..browser_automation.playwright_driver import playwright_status
+    from ..desktop_automation.pyautogui_driver import pyautogui_status
+
+    playwright = playwright_status()
+    pyautogui = pyautogui_status()
+    return "\n".join(
+        [
+            f"Automation adapters status: Playwright enabled={playwright.get('enabled')} available={playwright.get('available')}.",
+            f"PyAutoGUI strict adapter enabled={pyautogui.get('enabled')} available={pyautogui.get('available')}.",
+            "Existing Chrome/Desktop skills remain primary. Optional adapters refuse unsafe reads, raw coordinate clicks, and unconfirmed external/destructive actions.",
+        ]
+    )
+
+
 def _looks_like_identity_joke(original: str, payload: str) -> bool:
     text = f"{original} {payload}".lower()
     return bool(re.search(r"\b(my name is|i am|i'm|call me)\b", text)) and any(marker in text for marker in ("lmao", "lol", "jk", "joking", "just kidding"))
@@ -689,6 +780,24 @@ def maybe_handle_fast_command(
 
     if re.match(r"^agent mode:\s*say hello\b", original, flags=re.IGNORECASE) and "one sentence" in normalized:
         return "Hello, Ankit.", "fast-command"
+
+    if normalized in {"eva v2 status", "eva runtime status", "eva v2 runtime status"}:
+        return _format_eva_v2_status(), "fast-command"
+
+    if normalized in {"agents status", "agent registry status", "specialist agents status"}:
+        return _format_agents_status(), "fast-command"
+
+    if normalized in {"guardrails status", "guardrail status", "safety guardrails status"}:
+        return _format_guardrails_status(), "fast-command"
+
+    if normalized in {"vector memory status", "vectors status", "embedding memory status"}:
+        return _format_vector_memory_status(), "fast-command"
+
+    if normalized in {"traces status", "trace status", "last trace status"}:
+        return _format_traces_status(), "fast-command"
+
+    if normalized in {"automation adapters status", "automation adapter status", "browser automation status", "desktop automation status"}:
+        return _format_automation_adapters_status(), "fast-command"
 
     if normalized in {"agent status raw", "agentic status raw", "agent mode status raw"}:
         return _format_agent_status(raw=True), "fast-command"

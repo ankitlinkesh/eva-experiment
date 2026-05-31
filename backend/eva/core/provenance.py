@@ -8,12 +8,15 @@ PROVENANCE_LABELS = {
     "tavily_search": "Tavily web search",
     "browser_page": "the current browser page",
     "chrome_web_app": "a Chrome web-app action",
-    "chatgpt_in_chrome": "ChatGPT in Chrome",
+    "chatgpt_in_chrome_attempted_unavailable": "an unavailable ChatGPT-in-Chrome workflow",
+    "chatgpt_in_chrome_opened_only": "ChatGPT opened in Chrome",
+    "chatgpt_in_chrome_completed": "ChatGPT in Chrome",
     "research_sqlite": "local Research SQLite",
     "screen_vision": "screen vision",
     "code_workspace": "local workspace/code tools",
     "tool_result": "local tool result",
     "fast_local": "local deterministic Eva logic",
+    "no_answer_generated": "no generated answer",
 }
 
 
@@ -21,10 +24,16 @@ def provenance_from_source(source: str, tools: list[str] | None = None) -> str:
     source_text = str(source or "").lower()
     tool_names = [str(item or "").lower() for item in (tools or [])]
     joined = " ".join([source_text, *tool_names])
-    if "chatgpt_in_chrome_unavailable" in joined or "not_executed" in joined:
-        return "chrome_web_app"
+    if "chatgpt_in_chrome_completed" in joined:
+        return "chatgpt_in_chrome_completed"
+    if "chatgpt_in_chrome_opened_only" in joined:
+        return "chatgpt_in_chrome_opened_only"
+    if "chatgpt_in_chrome_unavailable" in joined or ("chatgpt_in_chrome" in joined and "not_executed" in joined):
+        return "chatgpt_in_chrome_attempted_unavailable"
+    if "no_answer_generated" in joined:
+        return "no_answer_generated"
     if "chatgpt_in_chrome" in joined:
-        return "chatgpt_in_chrome"
+        return "chatgpt_in_chrome_attempted_unavailable"
     if "tavily" in joined or "web_search" in joined:
         return "tavily_search"
     if "browser" in joined or "chrome" in joined:
@@ -69,6 +78,14 @@ def answer_provenance_status(session_context: dict[str, Any] | None) -> str:
     label = str(item.get("label") or PROVENANCE_LABELS.get(provenance, provenance))
     tools = [str(tool) for tool in item.get("tools") or [] if str(tool).strip()]
     source = str(item.get("source") or "").strip()
+    if provenance == "chatgpt_in_chrome_attempted_unavailable":
+        return "I did not get an answer from ChatGPT in Chrome. I reported that the workflow is not available or reliable yet."
+    if provenance == "chatgpt_in_chrome_opened_only":
+        return "I opened ChatGPT, but I did not use it to generate that answer."
+    if provenance == "chatgpt_in_chrome_completed":
+        return "That answer came from ChatGPT in Chrome. I submitted the prompt and read the visible response."
+    if provenance == "no_answer_generated":
+        return "I did not generate an answer for that request; I only reported that the requested workflow could not run."
     if tools:
         return f"That answer came from {label}. Tool used: {', '.join(tools)}."
     if provenance == "direct_llm":

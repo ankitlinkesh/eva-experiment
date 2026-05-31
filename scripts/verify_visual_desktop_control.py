@@ -208,7 +208,7 @@ def main() -> int:
     )
     failures += emit(
         "chatgpt_unavailable_not_marked_as_chatgpt_provenance",
-        provenance_from_source("capability:chatgpt_in_chrome_unavailable", ["chatgpt_in_chrome"]) != "chatgpt_in_chrome",
+        provenance_from_source("capability:chatgpt_in_chrome_unavailable", ["chatgpt_in_chrome"]) == "chatgpt_in_chrome_attempted_unavailable",
     )
 
     private_chatgpt = browser_skills.ask_chatgpt_in_chrome("summarize my local file C:\\Users\\HP\\Documents\\secret.txt")

@@ -176,6 +176,29 @@ def main() -> int:
         result=copy_url,
     )
 
+    verify_summary = _local_tool_summary(
+        [
+            ToolExecutionResult(
+                tool="verify_browser_target",
+                ok=False,
+                result={
+                    "ok": False,
+                    "verified": False,
+                    "user_message": "I can't verify the YouTube results right now because I couldn't read the live browser page.",
+                    "internal_error": "cache_only_target_unverified",
+                },
+                error=None,
+            )
+        ]
+    )
+    failures += emit(
+        "verify_browser_target_failure_uses_user_message",
+        "verify_browser_target failed: None" not in verify_summary
+        and "couldn't read the live browser page" in verify_summary
+        and not verify_summary.startswith("Done."),
+        summary=verify_summary,
+    )
+
     summary = classify_capability_intent("summarize this page", {})
     failures += emit(
         "summarize_this_page_routes_browser_summary",
