@@ -8,10 +8,22 @@ __pycache__/
 
 .env
 *.env
+.env.local
+.env.*.local
+*.secrets
+*.secret
 
 data/*.sqlite3
 data/*.log
 backend/eva/data/
+backend/data/checkpoints/
+*.sqlite3
+*.db
+logs/
+*.log
+screenshots/
+screen_frames/
+node_modules/
 
 .DS_Store
 Thumbs.db

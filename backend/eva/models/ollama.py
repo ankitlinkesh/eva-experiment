@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 import httpx
 
 from ..core.config import ModelSettings
-from ..core.persona import EVA_SYSTEM_PROMPT
+from ..core.persona import EVA_SYSTEM_PROMPT, clean_persona_reply
 
 
 class OllamaClient:
@@ -22,7 +22,7 @@ class OllamaClient:
         payload = self._payload(message, history, stream=False, model=model)
 
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=3.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0)) as client:
                 response = await client.post(f"{self.settings.ollama_url}/api/chat", json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -34,7 +34,7 @@ class OllamaClient:
             raise RuntimeError(f"Ollama returned invalid JSON: {response.text[:180]}") from exc
 
         content = data.get("message", {}).get("content", "")
-        return content.strip() or "I heard you, but the local model returned an empty response."
+        return clean_persona_reply(content) or "I heard you, but the local model returned an empty response."
 
     async def stream_chat(
         self,
@@ -45,7 +45,7 @@ class OllamaClient:
         payload = self._payload(message, history, stream=True, model=model)
 
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=3.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0)) as client:
                 async with client.stream("POST", f"{self.settings.ollama_url}/api/chat", json=payload) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():

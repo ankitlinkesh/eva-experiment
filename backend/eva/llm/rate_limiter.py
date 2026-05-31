@@ -5,19 +5,25 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 STATE_PATH = Path(__file__).resolve().parents[1] / "data" / "llm_usage_state.json"
 DEFAULT_RPM = {
-    "gemini": 8,
+    "gemini": 4,
     "groq": 30,
     "openrouter": 20,
+    "nvidia_nim": 20,
     "clod": 10,
 }
 DEFAULT_RPD = {
-    "gemini": 400,
+    "gemini": 18,
     "groq": 1000,
     "openrouter": 50,
+    "nvidia_nim": 300,
     "clod": 100,
+}
+DEFAULT_TPM = {
+    "gemini": 200000,
 }
 GROQ_MODEL_LIMITS = {
     "llama-3.3-70b-versatile": {"rpm": 30, "rpd": 1000, "tpm": 12000, "tpd": 100000},
@@ -81,6 +87,8 @@ def provider_limits(provider: str, model: str | None = None) -> tuple[int | None
 
 
 def provider_token_limits(provider: str, model: str | None = None) -> tuple[int | None, int | None]:
+    if provider == "gemini":
+        return _env_int("GEMINI_SOFT_TPM", DEFAULT_TPM["gemini"]), None
     if provider != "groq":
         return None, None
     defaults = _groq_defaults(model)
@@ -102,8 +110,16 @@ class LLMRateLimiter:
             return {}
 
     def save(self, state: dict[str, Any]) -> None:
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.{uuid4().hex}.tmp")
         tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+        for attempt in range(5):
+            try:
+                tmp.replace(self.path)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
         tmp.replace(self.path)
 
     def _entry(self, state: dict[str, Any], provider: str, model: str | None = None) -> dict[str, Any]:

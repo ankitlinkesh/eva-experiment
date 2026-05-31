@@ -44,7 +44,7 @@ class Settings:
     features: FeatureSettings
 
 
-def load_local_env(path: Path) -> None:
+def load_local_env(path: Path, *, override: bool = False) -> None:
     if not path.exists():
         return
     for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
@@ -54,8 +54,13 @@ def load_local_env(path: Path) -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+        if key and (override or key not in os.environ):
             os.environ[key] = value
+
+
+def load_project_env(root: Path) -> None:
+    load_local_env(root / ".env")
+    load_local_env(root / ".env.local", override=True)
 
 
 def _section(data: dict, name: str) -> dict:

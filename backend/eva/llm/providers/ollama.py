@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+import os
 
 from ...core.config import ModelSettings
 from ...models.ollama import OllamaClient
@@ -10,7 +12,13 @@ class OllamaProvider:
 
     def __init__(self, settings: ModelSettings) -> None:
         self.settings = settings
-        self.model = settings.fast_model or settings.ollama_model
+        mode = os.environ.get("EVA_LLM_MODE", "auto").strip().lower()
+        if mode == "qwen":
+            self.model = os.environ.get("EVA_OLLAMA_QWEN_MODEL", "").strip() or settings.fast_model or "qwen2.5:1.5b"
+        elif mode == "llama":
+            self.model = os.environ.get("EVA_OLLAMA_LLAMA_MODEL", "").strip() or "llama3.1:8b"
+        else:
+            self.model = os.environ.get("EVA_OLLAMA_FALLBACK_MODEL", "").strip() or settings.fast_model or settings.ollama_model
 
     def available(self) -> bool:
         return True

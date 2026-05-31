@@ -94,13 +94,16 @@ class ToolCallPlanner:
                     continue_after_tools=False,
                 )
 
-        screen_verbs = ("look at", "check", "inspect", "analyze", "analyse", "capture", "see", "view")
-        screen_words = ("screen", "display", "what is open", "what's open", "error")
-        if any(verb in text for verb in screen_verbs) and any(word in text for word in screen_words):
+        if self._explicit_screen_request(text):
+            raw_capture_only = any(word in text for word in ("screenshot", "capture screen", "take a screenshot")) and not any(
+                word in text for word in ("what", "tell", "analyze", "analyse", "check", "inspect", "error", "open")
+            )
+            tool_name = "capture_screen" if raw_capture_only else "analyze_screen"
+            args = {} if raw_capture_only else {"question": message.strip()[:800]}
             return PlannerDecision(
                 type="tool_calls",
-                reason="User explicitly requested one-time screen inspection.",
-                tool_calls=[PlannedToolCall(tool="capture_screen", args={})],
+                reason="User explicitly requested one-time screen analysis." if tool_name == "analyze_screen" else "User explicitly requested one-time screen capture.",
+                tool_calls=[PlannedToolCall(tool=tool_name, args=args)],
                 final_response="",
             )
 
@@ -138,6 +141,36 @@ class ToolCallPlanner:
                         tool_calls=[PlannedToolCall(tool="web_search", args={"query": query})],
                         final_response="",
                     )
+
+        if self._looks_like_workspace_goal(text):
+            if self._looks_like_code_goal(text):
+                if text in {"project map", "code project map"} or any(marker in text for marker in ("summarize architecture", "explain feature", "implemented", "provider", "agent", "runner", "router", "browser", "nim")):
+                    return PlannerDecision(
+                        type="tool_calls",
+                        reason="Local fallback mapped a safe code intelligence feature lookup.",
+                        tool_calls=[PlannedToolCall(tool="code_explain_feature", args={"feature": self._workspace_search_query(message)})],
+                        final_response="",
+                    )
+                return PlannerDecision(
+                    type="tool_calls",
+                    reason="Local fallback mapped a safe code search request.",
+                    tool_calls=[PlannedToolCall(tool="code_search", args={"query": self._workspace_search_query(message), "limit": 10})],
+                    final_response="",
+                )
+            if text in {"project structure", "inspect eva project", "summarize project", "summarize eva project", "explain the architecture"}:
+                return PlannerDecision(
+                    type="tool_calls",
+                    reason="Local fallback mapped a workspace project summary request.",
+                    tool_calls=[PlannedToolCall(tool="workspace_project_summary", args={})],
+                    final_response="",
+                )
+            query = self._workspace_search_query(message)
+            return PlannerDecision(
+                type="tool_calls",
+                reason="Local fallback mapped a safe workspace search request.",
+                tool_calls=[PlannedToolCall(tool="workspace_search", args={"query": query, "limit": 10})],
+                final_response="",
+            )
 
         if text in {"mute", "volume up", "volume down", "play", "pause", "next song", "previous song"}:
             action_map = {
@@ -178,7 +211,7 @@ class ToolCallPlanner:
                 type="done",
                 reason="Simple greeting goal can be answered directly.",
                 tool_calls=[],
-                final_response="Hello! I am Eva, online and ready to help.",
+                final_response="Yo, I'm here. What are we doing?",
                 continue_after_tools=False,
             )
 
@@ -201,9 +234,130 @@ class ToolCallPlanner:
                         final_response="",
                     )
 
+        if self._explicit_screen_request(text):
+            if "analyze_screen" not in observed_blob and "capture_screen" not in observed_blob:
+                return PlannerDecision(
+                    type="tool_calls",
+                    reason="Need to analyze the explicitly requested screen once.",
+                    tool_calls=[PlannedToolCall(tool="analyze_screen", args={"question": goal[:800]})],
+                    final_response="",
+                )
+            return PlannerDecision(
+                type="done",
+                reason="Screen analysis observation is available.",
+                tool_calls=[],
+                final_response=self._final_from_observations(observations),
+                continue_after_tools=False,
+            )
+
+        if self._looks_like_workspace_goal(text):
+            if self._looks_like_code_goal(text):
+                has_code_observation = "code_" in observed_blob or "patch plan" in observed_blob
+                if has_code_observation:
+                    return PlannerDecision(
+                        type="done",
+                        reason="Code intelligence observation is available.",
+                        tool_calls=[],
+                        final_response=self._final_from_observations(observations),
+                        continue_after_tools=False,
+                    )
+                if text.startswith(("plan change", "make a patch plan", "patch plan")):
+                    return PlannerDecision(
+                        type="tool_calls",
+                        reason="Need a read-only code change plan.",
+                        tool_calls=[PlannedToolCall(tool="code_plan_change", args={"goal": goal})],
+                        final_response="",
+                    )
+                if "traceback" in text or "debug this" in text or "error" in text:
+                    return PlannerDecision(
+                        type="tool_calls",
+                        reason="Need safe traceback/code debugging.",
+                        tool_calls=[PlannedToolCall(tool="code_debug_traceback", args={"traceback": goal})],
+                        final_response="",
+                    )
+                if any(marker in text for marker in ("project map", "architecture", "where is", "implemented", "explain feature", "provider", "agent", "runner", "router", "browser", "nim", "research knowledge")):
+                    return PlannerDecision(
+                        type="tool_calls",
+                        reason="Need code feature explanation.",
+                        tool_calls=[PlannedToolCall(tool="code_explain_feature", args={"feature": self._workspace_search_query(goal)})],
+                        final_response="",
+                    )
+                return PlannerDecision(
+                    type="tool_calls",
+                    reason="Need safe code search.",
+                    tool_calls=[PlannedToolCall(tool="code_search", args={"query": self._workspace_search_query(goal), "limit": 10})],
+                    final_response="",
+                )
+            has_workspace_observation = "workspace_" in observed_blob
+            if has_workspace_observation:
+                return PlannerDecision(
+                    type="done",
+                    reason="Workspace observation is available.",
+                    tool_calls=[],
+                    final_response=self._final_from_observations(observations),
+                    continue_after_tools=False,
+                )
+            read_target = self._read_file_target(goal)
+            if read_target:
+                return PlannerDecision(
+                    type="tool_calls",
+                    reason="Need to read a safe workspace file.",
+                    tool_calls=[PlannedToolCall(tool="workspace_read_file", args={"path": read_target})],
+                    final_response="",
+                )
+            if any(marker in text for marker in ("project structure", "summarize project", "summarize backend", "backend architecture", "explain the architecture", "inspect eva project", "what should we build next")):
+                return PlannerDecision(
+                    type="tool_calls",
+                    reason="Need a safe project-level workspace summary.",
+                    tool_calls=[PlannedToolCall(tool="workspace_project_summary", args={})],
+                    final_response="",
+                )
+            return PlannerDecision(
+                type="tool_calls",
+                reason="Need to search the Eva workspace safely.",
+                tool_calls=[PlannedToolCall(tool="workspace_search", args={"query": self._workspace_search_query(goal), "limit": 10})],
+                final_response="",
+            )
+
+        if self._looks_like_research_goal(text):
+            topic = self._research_topic(goal)
+            has_research_observation = "research_" in observed_blob or "saved local matches" in observed_blob
+            has_fresh_sources = "research_web saved" in observed_blob or "fresh sources" in observed_blob
+            if not has_research_observation:
+                return PlannerDecision(
+                    type="tool_calls",
+                    reason="Need to check saved local research knowledge first.",
+                    tool_calls=[PlannedToolCall(tool="research_recall", args={"topic": topic, "query": self._research_query(goal), "limit": 5})],
+                    final_response="",
+                )
+            if not has_fresh_sources and ("found 0 saved" in observed_blob or "latest" in text or "current" in text or "research" in text):
+                return PlannerDecision(
+                    type="tool_calls",
+                    reason="Need fresh sources and local research persistence.",
+                    tool_calls=[PlannedToolCall(tool="research_web", args={"topic": topic, "query": self._research_query(goal), "max_results": 5})],
+                    final_response="",
+                )
+            return PlannerDecision(
+                type="done",
+                reason="Research observation is available.",
+                tool_calls=[],
+                final_response=self._final_from_observations(observations),
+                continue_after_tools=False,
+            )
+
         if self._looks_like_web_goal(text):
             query = self._search_query(goal)
-            if "web_search observed" not in observed_blob and "web_search opened browser fallback" not in observed_blob:
+            has_web_observation = any(
+                marker in observed_blob
+                for marker in (
+                    "web_search observed",
+                    "web_search opened browser fallback",
+                    "here are the top results",
+                    "want me to open one of these",
+                    "i opened a browser search",
+                )
+            )
+            if not has_web_observation:
                 return PlannerDecision(
                     type="tool_calls",
                     reason="Need current web results.",
@@ -277,10 +431,17 @@ Rules:
 - Use open_app for known apps such as chrome, spotify, vscode, codex, settings, notepad.
 - Use open_folder for known folders such as downloads, documents, desktop, eva folder.
 - Use web_search for web searches; use open_url for explicit URLs.
+- Use browser_status/browser_current_page for browser state questions such as "what page am I on" or "what website is open".
+- Use browser_search for browser-heavy search workflows where the user wants Chrome/browser context. Use browser_open_url for safe explicit URLs when browser verification matters.
+- Use browser_summarize_page, browser_extract_links, or browser_save_page_to_research only when the user explicitly asks to summarize/read/extract links/save the current page. Do not read private, login, payment, account, cookie, token, or password content.
 - Use media_control for volume, mute, play/pause, next, previous.
 - Use lock_laptop for lock requests.
 - For shutdown, restart, sleep, sign out, or log out, do not call a tool unless the user explicitly confirms in this same message. If not confirmed, use type "confirmation_required" and final_response should ask for confirmation.
-- For screen capture, only call capture_screen when the user explicitly asks Eva to look at, check, inspect, analyze, or capture the screen.
+- Use analyze_screen when the user asks Eva to understand, check, inspect, analyze, or identify an error on the screen. Use capture_screen only for a raw screenshot/capture request.
+- Use window_active/window_list for active or open window questions. Use window_focus/window_minimize/window_maximize for explicit window-management requests. Use desktop_observe for a bounded desktop state snapshot. Keep include_screen=false unless the user explicitly asks to inspect the screen.
+- Use code_search, code_find_symbol, code_project_map, code_explain_feature, code_debug_traceback, or code_plan_change for codebase/symbol/implementation/debugging/patch-plan questions. These tools are read-only and do not edit files.
+- Use workspace_search, workspace_read_file, workspace_list_files, workspace_summarize_file, or workspace_project_summary for generic safe file inspection. Workspace tools are read-only.
+- Use research_start_topic, research_recall, research_web, research_save_note, or research_summary for local research knowledge commands and long-term topic knowledge.
 - No arbitrary shell commands. No camera. No always-on screen watching.
 """.strip()
 
@@ -292,7 +453,9 @@ Rules:
         ]
         compact_context = {
             "goal": task_context.get("goal") or message,
+            "plan": task_context.get("plan") or [],
             "observations": (task_context.get("observations") or [])[-6:],
+            "reflections": (task_context.get("reflections") or [])[-4:],
             "steps": (task_context.get("steps") or [])[-6:],
             "limits": task_context.get("limits") or {},
         }
@@ -328,8 +491,14 @@ Rules:
 - Never call tools outside the registry. Never invent tool names.
 - Do not repeat the same web_search query already present in observations.
 - Use web_search for research/current web information.
+- Use browser_search for browser-heavy search tasks, browser_current_page for current page questions, browser_summarize_page for explicit current-page summaries, browser_extract_links for explicit link extraction, and browser_save_page_to_research when the user asks to save the current page into research.
+- Browser tools must not access cookies, tokens, password fields, payment/account pages, or private page content. If browser reading is blocked, ask for a safe URL or pasted visible text.
+- Use research_recall first, then research_web for research knowledge-base goals where the user wants to save, remember, build knowledge, make Eva a superbrain, or research a topic over time.
 - Use open_app/open_folder/open_url only for explicit desktop/navigation goals.
-- Do not call capture_screen unless the user explicitly asks to inspect/look/check/analyze the screen.
+- Use analyze_screen when the user explicitly asks to inspect/look/check/analyze the screen or identify a visible error. Use capture_screen only for raw screenshot capture.
+- Use window_active/window_list for active or open window questions. Use window_focus/window_minimize/window_maximize for explicit window-management steps. Use verify_last_action after desktop actions when the task depends on knowing whether an action succeeded.
+- Use code tools for Eva codebase questions. Prefer code_explain_feature for "where is X implemented", code_project_map for architecture/project map, code_find_symbol for symbol lookup, code_debug_traceback for pasted errors, and code_plan_change for requested patch plans.
+- Use workspace tools for generic safe file reads/listing. Use workspace_read_file only when a relative file path is explicit.
 - For shutdown, restart, sleep, sign out, or log out, return confirmation_required and do not call a power tool.
 - If observations are enough, return type "done" with a concise final_response.
 - No arbitrary shell commands. No camera. No hidden screen watching.
@@ -420,6 +589,11 @@ Rules:
                 return normalized
         return "dangerous_action"
 
+
+    def _explicit_screen_request(self, text: str) -> bool:
+        screen_verbs = ("look at", "check", "inspect", "analyze", "analyse", "capture", "see", "view", "identify", "show")
+        screen_words = ("screen", "display", "what is open", "what's open", "error")
+        return any(verb in text for verb in screen_verbs) and any(word in text for word in screen_words)
     def _app_aliases(self) -> dict[str, str]:
         return {
             "chrome": "chrome",
@@ -452,10 +626,88 @@ Rules:
     def _looks_like_web_goal(self, text: str) -> bool:
         return any(word in text for word in ("research", "find", "summarize", "search", "compare", "latest", "best", "github", "repos", "rate limits"))
 
+    def _looks_like_research_goal(self, text: str) -> bool:
+        return any(
+            marker in text
+            for marker in (
+                "research ",
+                "knowledge base",
+                "saved research",
+                "local research",
+                "find and remember",
+                "remember best",
+                "make eva a superbrain",
+                "what do we know about",
+                "nvidia nim",
+            )
+        )
+
+    def _looks_like_workspace_goal(self, text: str) -> bool:
+        return any(
+            marker in text
+            for marker in (
+                "eva project",
+                "workspace",
+                "project structure",
+                "backend architecture",
+                "summarize backend",
+                "agent runner",
+                "llm router",
+                "web_search",
+                "tavily",
+                "implemented",
+                "read file",
+                "where is",
+                "where are",
+                "what changed in eva",
+                "debug this error in eva",
+                "what should we build next",
+            )
+        )
+
+    def _looks_like_code_goal(self, text: str) -> bool:
+        return any(
+            marker in text
+            for marker in (
+                "code",
+                "symbol",
+                "traceback",
+                "patch plan",
+                "plan change",
+                "implemented",
+                "where is",
+                "explain feature",
+                "debug this",
+                "fix this error",
+                "nim provider",
+                "browser agent",
+                "desktop agent",
+                "research knowledge",
+                "agent runner",
+                "llm router",
+                "find dead code",
+                "todo",
+            )
+        )
+
+    def _read_file_target(self, goal: str) -> str | None:
+        match = re.search(r"\b(?:read|show|inspect)\s+file\s+(.+)$", goal, flags=re.IGNORECASE)
+        if not match:
+            return None
+        return match.group(1).strip(" .\"'")
+
+    def _workspace_search_query(self, goal: str) -> str:
+        clean = self._clean_agent_goal(goal)
+        lowered = clean.lower()
+        for prefix in ("where is ", "where are ", "find file ", "find where ", "search project for ", "search workspace for "):
+            if lowered.startswith(prefix):
+                return clean[len(prefix):].strip(" ?:") or clean
+        return clean
+
     def _search_query(self, goal: str) -> str:
         clean = self._clean_agent_goal(goal)
         lowered = clean.lower()
-        for marker in ("search web for", "search for", "look up", "google"):
+        for marker in ("search web for", "search for", "look up", "google", "search"):
             if marker in lowered:
                 index = lowered.index(marker) + len(marker)
                 return clean[index:].strip(" :") or clean
@@ -476,7 +728,27 @@ Rules:
         query = " ".join(query.strip(" :").split())
         return query or clean
 
+    def _research_topic(self, goal: str) -> str:
+        clean = self._clean_agent_goal(goal).strip()
+        lowered = clean.lower()
+        if lowered.startswith("research "):
+            return clean[len("research "):].split(":", 1)[0].strip() or clean
+        if "about " in lowered:
+            return clean[lowered.rindex("about ") + len("about "):].strip(" .?:") or clean
+        if " on " in lowered:
+            return clean[lowered.rindex(" on ") + len(" on "):].strip(" .?:") or clean
+        return self._search_query(clean)[:160] or clean[:160]
+
+    def _research_query(self, goal: str) -> str:
+        clean = self._clean_agent_goal(goal).strip()
+        if ":" in clean and clean.lower().startswith("research "):
+            return clean.split(":", 1)[1].strip() or clean
+        return self._search_query(clean)
+
     def _final_from_observations(self, observations: list[str]) -> str:
         if not observations:
             return "I finished the task."
+        latest = observations[-1].strip()
+        if latest.lower().startswith(("here are the top results", "i opened a browser search", "research_")):
+            return latest
         return "I finished the task. " + " ".join(observations[-3:])

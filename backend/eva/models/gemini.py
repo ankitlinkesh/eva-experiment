@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 import httpx
 
 from ..core.config import ModelSettings
-from ..core.persona import EVA_SYSTEM_PROMPT
+from ..core.persona import EVA_SYSTEM_PROMPT, clean_persona_reply
 
 
 class GeminiClient:
@@ -28,7 +28,7 @@ class GeminiClient:
         url = self._url(target_model, stream=False)
         headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(35.0, connect=5.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=4.0)) as client:
                 response = await client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -36,7 +36,7 @@ class GeminiClient:
             raise RuntimeError(f"Gemini request failed: HTTP {exc.response.status_code}: {detail}") from exc
         except httpx.HTTPError as exc:
             raise RuntimeError(f"Gemini request failed: {exc}") from exc
-        return self._extract_text(response.json())
+        return clean_persona_reply(self._extract_text(response.json()))
 
     async def stream_chat(
         self,
@@ -49,7 +49,7 @@ class GeminiClient:
         url = self._url(target_model, stream=True)
         headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=5.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=4.0)) as client:
                 async with client.stream("POST", url, headers=headers, json=payload) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():

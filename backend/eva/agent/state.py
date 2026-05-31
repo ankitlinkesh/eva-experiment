@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 
@@ -20,9 +20,9 @@ class AgentRunState:
 
     def record_tool(self, call: PlannedToolCall) -> None:
         self.tool_calls += 1
-        if call.tool == "web_search":
+        if call.tool in {"web_search", "research_web", "browser_search"}:
             self.web_searches += 1
-        if call.tool == "capture_screen":
+        if call.tool in {"capture_screen", "analyze_screen"} or (call.tool == "desktop_observe" and bool(call.args.get("include_screen"))):
             self.screen_captures += 1
         self.signatures.append(tool_signature(call))
 

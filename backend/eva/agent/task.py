@@ -5,8 +5,9 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
-TaskStatus = Literal["planning", "running", "waiting_for_confirmation", "done", "failed", "cancelled"]
+TaskStatus = Literal["planning", "running", "reflecting", "waiting_for_confirmation", "done", "failed", "cancelled"]
 StepStatus = Literal["planned", "running", "done", "failed", "skipped"]
+ReflectionStatus = Literal["continue", "complete", "blocked", "needs_confirmation"]
 
 
 def utc_now() -> str:
@@ -29,12 +30,28 @@ class AgentStep:
 
 
 @dataclass
+class AgentReflection:
+    step_index: int
+    summary: str
+    status: ReflectionStatus = "continue"
+    confidence: float = 0.5
+    next_focus: str = ""
+    created_at: str = field(default_factory=utc_now)
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class AgentTask:
     user_goal: str
     id: str = field(default_factory=lambda: uuid4().hex)
     status: TaskStatus = "planning"
+    plan: list[str] = field(default_factory=list)
     steps: list[AgentStep] = field(default_factory=list)
     observations: list[str] = field(default_factory=list)
+    reflections: list[AgentReflection] = field(default_factory=list)
+    memory_notes: list[str] = field(default_factory=list)
     final_response: str = ""
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
@@ -54,13 +71,24 @@ class AgentTask:
         self.observations.append(observation)
         self.touch()
 
+    def add_reflection(self, reflection: AgentReflection) -> None:
+        self.reflections.append(reflection)
+        self.touch()
+
+    def add_memory_note(self, note: str) -> None:
+        self.memory_notes.append(note)
+        self.touch()
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "user_goal": self.user_goal,
             "status": self.status,
+            "plan": list(self.plan),
             "steps": [step.as_dict() for step in self.steps],
             "observations": list(self.observations),
+            "reflections": [reflection.as_dict() for reflection in self.reflections],
+            "memory_notes": list(self.memory_notes),
             "final_response": self.final_response,
             "created_at": self.created_at,
             "updated_at": self.updated_at,

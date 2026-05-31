@@ -53,7 +53,47 @@ SPECIAL_FOLDERS: dict[str, Path] = {
     "eva folder": Path(__file__).resolve().parents[3],
 }
 
-SAFE_CLOSE_PROCESSES: dict[str, tuple[str, ...]] = {
+DEFAULT_CLOSE_APP_ALLOWLIST: tuple[str, ...] = (
+    "calculator",
+    "chrome",
+    "discord",
+    "edge",
+    "notepad",
+    "spotify",
+    "vscode",
+    "codex",
+    "terminal",
+    "powershell",
+    "word",
+    "excel",
+    "powerpoint",
+)
+
+BLOCKED_CLOSE_APP_NAMES = {
+    "antimalware service executable",
+    "cmd",
+    "csrss",
+    "defender",
+    "desktop window manager",
+    "dwm",
+    "explorer",
+    "lsass",
+    "microsoft defender",
+    "msmpeng",
+    "registry",
+    "runtimebroker",
+    "services",
+    "smss",
+    "svchost",
+    "system",
+    "system idle process",
+    "task manager",
+    "taskhostw",
+    "wininit",
+    "winlogon",
+}
+
+CLOSE_APP_PROCESS_NAMES: dict[str, tuple[str, ...]] = {
     "notepad": ("notepad.exe",),
     "calculator": ("CalculatorApp.exe", "calc.exe"),
     "chrome": ("chrome.exe",),
@@ -61,6 +101,12 @@ SAFE_CLOSE_PROCESSES: dict[str, tuple[str, ...]] = {
     "spotify": ("Spotify.exe",),
     "discord": ("Discord.exe",),
     "vscode": ("Code.exe",),
+    "codex": ("Codex.exe",),
+    "terminal": ("WindowsTerminal.exe", "wt.exe"),
+    "powershell": ("powershell.exe", "pwsh.exe"),
+    "word": ("WINWORD.EXE",),
+    "excel": ("EXCEL.EXE",),
+    "powerpoint": ("POWERPNT.EXE",),
 }
 
 
@@ -122,6 +168,19 @@ def _canonical_app(app_name: str) -> str:
     return query
 
 
+def close_app_allowlist() -> tuple[str, ...]:
+    raw = os.environ.get("EVA_CLOSE_APP_ALLOWLIST", "")
+    configured = [part.strip() for part in raw.split(",") if part.strip()] if raw.strip() else list(DEFAULT_CLOSE_APP_ALLOWLIST)
+    allowed: list[str] = []
+    for item in configured:
+        key = _canonical_app(item)
+        if key in BLOCKED_CLOSE_APP_NAMES:
+            continue
+        if key in CLOSE_APP_PROCESS_NAMES:
+            allowed.append(key)
+    return tuple(sorted(dict.fromkeys(allowed)))
+
+
 def open_app(app_name: str) -> str:
     key = _canonical_app(app_name)
     if key not in APP_ALIASES:
@@ -147,15 +206,13 @@ def open_app(app_name: str) -> str:
     raise ValueError(f"Could not find {key} on this laptop. Supported apps: {supported}.")
 
 
-def open_allowed_app(app_name: str) -> str:
-    return open_app(app_name)
-
-
 def close_app(app_name: str) -> str:
     key = _canonical_app(app_name)
-    process_names = SAFE_CLOSE_PROCESSES.get(key)
-    if not process_names:
-        raise ValueError(f"I can only close allowlisted apps for safety. Supported: {', '.join(sorted(SAFE_CLOSE_PROCESSES))}.")
+    allowed = set(close_app_allowlist())
+    process_names = CLOSE_APP_PROCESS_NAMES.get(key)
+    if key in BLOCKED_CLOSE_APP_NAMES or key not in allowed or not process_names:
+        supported = ", ".join(close_app_allowlist()) or "none configured"
+        raise ValueError(f"I can close that if it is in the safe close allowlist. Supported: {supported}.")
     for process_name in process_names:
         subprocess.run(["taskkill", "/IM", process_name, "/T", "/F"], capture_output=True, text=True, timeout=8)
     return f"Asked Windows to close {key}."

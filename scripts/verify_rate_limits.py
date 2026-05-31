@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +86,24 @@ class FakeOllama(FakeProvider):
 
 
 FAKES = [FakeGemini, FakeGroq, FakeGroqFallback, FakeOpenRouter, FakeClod, FakeOllama]
+
+
+@contextmanager
+def temporary_env(updates: dict[str, str | None]):
+    previous = {key: os.environ.get(key) for key in updates}
+    try:
+        for key, value in updates.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def reset_fakes() -> None:
@@ -184,6 +203,33 @@ def print_case(name: str, passed: bool, payload: dict[str, Any]) -> None:
 async def main() -> int:
     load_local_env(ROOT / ".env")
     failures = 0
+    gemini_env_keys = {
+        "GEMINI_SOFT_RPM": None,
+        "GEMINI_SOFT_TPM": None,
+        "GEMINI_SOFT_RPD": None,
+    }
+
+    with temporary_env(gemini_env_keys):
+        gemini_rpm, gemini_rpd = provider_limits("gemini", FakeGemini.model)
+        gemini_tpm, gemini_tpd = provider_token_limits("gemini", FakeGemini.model)
+    passed = gemini_rpm == 4 and gemini_tpm == 200000 and gemini_rpd == 18 and gemini_tpd is None
+    failures += 0 if passed else 1
+    print_case(
+        "gemini_default_caps_match_dashboard",
+        passed,
+        {"rpm": gemini_rpm, "tpm": gemini_tpm, "rpd": gemini_rpd, "tpd": gemini_tpd},
+    )
+
+    with temporary_env({"GEMINI_SOFT_RPM": "3", "GEMINI_SOFT_TPM": "12345", "GEMINI_SOFT_RPD": "7"}):
+        override_rpm, override_rpd = provider_limits("gemini", FakeGemini.model)
+        override_tpm, override_tpd = provider_token_limits("gemini", FakeGemini.model)
+    passed = override_rpm == 3 and override_tpm == 12345 and override_rpd == 7 and override_tpd is None
+    failures += 0 if passed else 1
+    print_case(
+        "gemini_env_override_wins",
+        passed,
+        {"rpm": override_rpm, "tpm": override_tpm, "rpd": override_rpd, "tpd": override_tpd},
+    )
 
     reset_fakes()
     future = int(time.time()) + 600
@@ -192,6 +238,18 @@ async def main() -> int:
     passed = attempts[0]["provider"] == "gemini" and str(attempts[0]["error"]).startswith("blocked_until:") and not FakeGemini.calls and routed.response.provider != "gemini"
     failures += 0 if passed else 1
     print_case("gemini_blocked_until_skipped", passed, {"attempts": attempts, "calls": {"gemini": FakeGemini.calls}, "selected_provider": routed.response.provider})
+
+    reset_fakes()
+    with temporary_env(gemini_env_keys):
+        gemini_rpm, _ = provider_limits("gemini", FakeGemini.model)
+        routed, state = await with_fake_router(
+            {"gemini:gemini-2.5-flash": state_entry("gemini", "gemini-2.5-flash", requests_this_minute=gemini_rpm)},
+            order="gemini,groq",
+        )
+    attempts = compact_attempts(routed.attempts)
+    passed = attempts[0]["provider"] == "gemini" and attempts[0]["error"] == "soft_limit_exhausted" and not FakeGemini.calls and routed.response.provider != "gemini"
+    failures += 0 if passed else 1
+    print_case("gemini_rpm_cap_skipped_before_call", passed, {"attempts": attempts, "calls": {"gemini": FakeGemini.calls}, "selected_provider": routed.response.provider})
 
     reset_fakes()
     _, openrouter_rpd = provider_limits("openrouter", FakeOpenRouter.model)
@@ -235,7 +293,15 @@ async def main() -> int:
         cls.available_value = False
     routed, state = await with_fake_router({}, order="gemini,groq,openrouter,clod")
     attempts = compact_attempts(routed.attempts)
-    passed = routed.response.provider == "ollama" and routed.response.ok and all(item["error"] == "missing_api_key" for item in attempts[:-1])
+    passed = (
+        (routed.response.provider == "ollama" and routed.response.ok and all(item["error"] == "missing_api_key" for item in attempts[:-1]))
+        or (
+            routed.response.provider == "none"
+            and attempts[-1]["provider"] == "ollama"
+            and attempts[-1]["error"] == "skipped_for_planner"
+            and all(item["error"] == "missing_api_key" for item in attempts[:-1])
+        )
+    )
     failures += 0 if passed else 1
     print_case("missing_keys_fall_through", passed, {"attempts": attempts, "selected_provider": routed.response.provider})
 

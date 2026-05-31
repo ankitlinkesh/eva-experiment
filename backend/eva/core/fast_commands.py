@@ -3,13 +3,24 @@
 import json
 import re
 
-from ..llm.router import get_llm_status
-from ..core.persona import CAPABILITY_SUMMARY, USER_PROFILE_SUMMARY
+from ..diagnostics.health import get_eva_health_summary
+from ..diagnostics.providers import format_llm_status
+from ..llm.router import get_llm_status, set_llm_mode
+from ..core.persona import ASSISTANT_NAME, CAPABILITY_SUMMARY, USER_PROFILE_SUMMARY
+from ..core.provenance import answer_provenance_status
+from ..core.web_context import (
+    last_web_results,
+    profile_key_from_message,
+    profile_urls,
+    remember_web_results,
+    result_reference_from_message,
+    wants_previous_result,
+)
 from ..tools.registry import ToolRegistry
 from ..tools.tavily_search import tavily_status
+from ..vision import vision_status
 
 
-GREETINGS = {"hi", "hii", "hiii", "hello", "hey", "yo", "eva"}
 APP_WORDS = {
     "calculator",
     "chrome",
@@ -47,9 +58,11 @@ ABOUT_ME_COMMANDS = {
     "tell me about myself",
     "about me",
     "what do you know about me",
+    "what do u know about me",
     "who am i",
     "who am i to you",
     "what do you remember about me",
+    "what do u remember about me",
 }
 ABOUT_EVA_COMMANDS = {
     "tell me about yourself",
@@ -58,10 +71,190 @@ ABOUT_EVA_COMMANDS = {
     "introduce yourself",
 }
 EVA_IDENTITY_SUMMARY = (
-    "I am Eva, your local desktop agent for this Windows laptop. I can open apps, search, control basic "
-    "desktop actions, show screen snapshots only when asked, and respond through local Ollama. I will not "
-    "pretend I have calendar, email, or messaging powers until those modules actually exist."
+    f"I'm {ASSISTANT_NAME} — your local agent running on this laptop."
 )
+LOCAL_MEMORY_SUMMARY = (
+    "Yep. Eva has local SQLite memory on this laptop. Right now I store chat messages and tool events locally, "
+    "and I use the known local profile for stable things like your name and Eva project preferences. I'm not a "
+    "stateless cloud bot here, but I also won't invent personal facts you haven't told me."
+)
+AGENT_STATUS_SUMMARY = {
+    "mode": "Agentic v2",
+    "loop": "bounded plan -> act -> observe -> reflect -> stop/continue",
+    "safety": {
+        "arbitrary_shell": False,
+        "camera": False,
+        "always_on_screen": False,
+        "power_actions_need_confirmation": True,
+        "tools_are_whitelisted": True,
+    },
+    "features": [
+        "initial task plan",
+        "step-by-step safe tool execution",
+        "observation tracking",
+        "reflection after tool results",
+        "SQLite chat/event memory",
+        "user facts via 'remember that ...'",
+        "repeat-action stop",
+        "budget limits for tools, web searches, and screen captures",
+    ],
+}
+
+
+def _json_debug(value: object) -> str:
+    return json.dumps(value, indent=2, ensure_ascii=False)
+
+
+def _format_agent_status(*, raw: bool = False) -> str:
+    if raw:
+        return _json_debug(AGENT_STATUS_SUMMARY)
+    safety = AGENT_STATUS_SUMMARY["safety"]
+    return "\n".join(
+        [
+            "Agent status: Agentic v2 is available.",
+            "Loop: bounded plan -> act -> observe -> reflect -> continue/stop.",
+            "Verification: tool observations and reflections are tracked before Eva reports completion.",
+            "Safety: arbitrary shell is blocked, camera is off, always-on screen watching is off, and power actions require confirmation.",
+            f"Limits: {len(AGENT_STATUS_SUMMARY['features'])} tracked agent features are enabled. Say `agent status raw` for debug JSON.",
+        ]
+    )
+
+
+def _format_tools_status(tools: ToolRegistry, *, raw: bool = False) -> str:
+    specs = tools.list_tools()
+    if raw:
+        return _json_debug({"tool_count": len(specs), "tools": specs})
+    categories: dict[str, int] = {}
+    risky: dict[str, int] = {}
+    confirmation_count = 0
+    rollback_count = 0
+    for spec in specs:
+        categories[str(spec.get("category") or "general")] = categories.get(str(spec.get("category") or "general"), 0) + 1
+        risky[str(spec.get("risk") or "low")] = risky.get(str(spec.get("risk") or "low"), 0) + 1
+        confirmation_count += 1 if spec.get("requires_confirmation") else 0
+        rollback_count += 1 if spec.get("supports_rollback") else 0
+    category_text = ", ".join(f"{name}: {count}" for name, count in sorted(categories.items()))
+    risk_text = ", ".join(f"{name}: {count}" for name, count in sorted(risky.items()))
+    return "\n".join(
+        [
+            f"Tools status: Eva has {len(specs)} registered tool specs in the local tool registry.",
+            f"Categories: {category_text}.",
+            f"Risk levels: {risk_text}.",
+            f"Permission-aware tools: {confirmation_count} require confirmation/override; {rollback_count} advertise rollback support.",
+            "No arbitrary shell tool is registered as a default path. Say `tools status raw` for debug JSON.",
+        ]
+    )
+
+
+def _format_permissions_status(*, raw: bool = False) -> str:
+    payload = {
+        "safe_local_actions": "allow",
+        "privacy_screen_file_chat_reads": "ask_override",
+        "external_messages_posts_forms": "ask_confirmation",
+        "destructive_file_or_system_changes": "ask_override",
+        "power_actions": "ask_confirmation",
+        "shell_default": "hard_block",
+        "override_phrase": "confirm override",
+        "override_expires_after_seconds": 120,
+        "hard_blocks": ["credential theft", "spyware behavior", "malware-like actions", "illegal harmful requests"],
+    }
+    if raw:
+        return _json_debug(payload)
+    return "\n".join(
+        [
+            "Permissions status: Eva's local permission gate is active.",
+            "Allowed: safe local reads and bounded visible UI actions.",
+            "Confirmation required: external messages, posts, form submits, and guarded power actions.",
+            "Override required: privacy-sensitive reads, destructive file actions, and system-changing actions. Override phrase: `confirm override`.",
+            "Hard blocked: credential access, spying, malware-like behavior, illegal harmful requests, and arbitrary shell by default.",
+            "Say `permissions status raw` for debug JSON.",
+        ]
+    )
+
+
+def _format_code_status(result: object, *, raw: bool = False) -> str:
+    if raw:
+        return _json_debug(result)
+    if not isinstance(result, dict) or not result.get("ok"):
+        return f"Code status: unavailable safely ({result.get('error') if isinstance(result, dict) else 'unknown error'})."
+    indexed = "ready" if result.get("indexed") else "not built yet"
+    return (
+        f"Code status: safe code index is {indexed}. "
+        f"Indexed files: {result.get('indexed_files', 0)}. "
+        f"Secrets indexed: {'yes' if result.get('secrets_indexed') else 'no'}. "
+        "Say `code status raw` for debug JSON."
+    )
+
+
+def _format_research_status(result: object, *, raw: bool = False) -> str:
+    if raw:
+        return _json_debug(result)
+    if not isinstance(result, dict) or not result.get("ok"):
+        return f"Research status: unavailable safely ({result.get('error') if isinstance(result, dict) else 'unknown error'})."
+    return (
+        "Research status: local SQLite research knowledge is available. "
+        f"Topics: {result.get('topic_count', 0)}. Sources: {result.get('item_count', 0)}. "
+        f"Notes: {result.get('note_count', 0)}. Sessions: {result.get('session_count', 0)}. "
+        "Say `research status raw` for debug JSON."
+    )
+
+
+def _looks_like_identity_joke(original: str, payload: str) -> bool:
+    text = f"{original} {payload}".lower()
+    return bool(re.search(r"\b(my name is|i am|i'm|call me)\b", text)) and any(marker in text for marker in ("lmao", "lol", "jk", "joking", "just kidding"))
+
+
+def _is_about_me_command(text: str) -> bool:
+    if any(command in text for command in ABOUT_ME_COMMANDS):
+        return True
+    return (
+        ("what" in text or "tell" in text or "remember" in text)
+        and ("know" in text or "remember" in text)
+        and ("about me" in text or "abt me" in text or "about myself" in text)
+    )
+
+
+def _is_local_memory_question(text: str) -> bool:
+    memory_words = ("memory", "remember", "store", "storage", "sqlite", "local")
+    can_words = ("can", "could", "right", "rite", "yes", "u can", "you can")
+    return (
+        any(word in text for word in memory_words)
+        and any(word in text for word in can_words)
+        and ("sqlite" in text or "local" in text or "store" in text or "memory" in text)
+    )
+
+
+def _remember_payload(original: str) -> str | None:
+    lowered = original.lower().strip()
+    for prefix in ("remember that ", "remember this ", "save this ", "store this "):
+        if lowered.startswith(prefix):
+            return original[len(prefix):].strip(" .")
+    return None
+
+
+def _project_note_payload(original: str) -> str | None:
+    lowered = original.lower().strip()
+    for prefix in ("remember project note that ", "remember project note ", "save project note that ", "store project note that "):
+        if lowered.startswith(prefix):
+            return original[len(prefix):].strip(" .")
+    return None
+
+
+def _memory_facts_summary(memory: object | None) -> str:
+    if memory is None or not hasattr(memory, "recent_memories"):
+        return ""
+    try:
+        facts = memory.recent_memories(limit=5)
+    except Exception:
+        return ""
+    if not facts:
+        return ""
+    lines = ["Extra things you've asked me to remember locally:"]
+    for fact in facts[:5]:
+        value = str(fact.get("value") or "").strip()
+        if value:
+            lines.append(f"- {value}")
+    return "\n".join(lines)
 
 
 def _after_prefix(text: str, prefixes: tuple[str, ...]) -> str | None:
@@ -78,13 +271,18 @@ def _format_web_search_result(result: object) -> str:
         return str(result)
     query = result.get("query") or "your search"
     if result.get("ok") and result.get("provider") == "tavily":
-        lines = [f"I searched Tavily for: {query}."]
+        personal_profile = _looks_like_personal_profile_query(str(query))
+        lines = [
+            "I found possible matches, but I can't assume which one is yours."
+            if personal_profile
+            else f"I searched Tavily for: {query}."
+        ]
         answer = str(result.get("answer") or "").strip()
-        if answer:
+        if answer and not personal_profile:
             lines.append(answer)
         results = result.get("results") or []
         if isinstance(results, list) and results:
-            lines.append("Top results:")
+            lines.append("Options:" if personal_profile else "Top results:")
             for item in results[:5]:
                 if not isinstance(item, dict):
                     continue
@@ -98,27 +296,514 @@ def _format_web_search_result(result: object) -> str:
     return str(result)
 
 
-def _run_tool(tools: ToolRegistry, name: str, **kwargs: object) -> tuple[str, str]:
+def _format_screen_result(result: object) -> str:
+    if not isinstance(result, dict):
+        return str(result)
+    if not result.get("ok"):
+        summary = str(result.get("summary") or "").strip()
+        if result.get("rate_limited") and summary:
+            return summary
+        return f"I captured the screen once, but vision analysis failed: {result.get('error') or 'unknown error'}."
+    summary = str(result.get("summary") or "").strip()
+    issue = str(result.get("possible_issue") or "").strip()
+    actions = result.get("suggested_actions") or []
+    chunks = [summary or "I analyzed the screen, but the image is unclear."]
+    if issue:
+        chunks.append(f"Possible issue: {issue}")
+    if isinstance(actions, list) and actions:
+        chunks.append("Try this: " + "; ".join(str(item) for item in actions[:3] if str(item).strip()))
+    return " ".join(chunks)
+
+
+def _format_workspace_result(result: object, *, mode: str = "generic") -> str:
+    if not isinstance(result, dict):
+        return str(result)
+    if not result.get("ok"):
+        return f"I refused that workspace request safely: {result.get('error') or 'unknown error'}."
+
+    if mode == "status" or "exclude_dirs" in result:
+        return json.dumps(result, indent=2)
+
+    if "sections" in result:
+        lines = ["Here is Eva's project shape:"]
+        for section in result.get("sections") or []:
+            if not isinstance(section, dict):
+                continue
+            folder = section.get("folder")
+            description = section.get("description")
+            lines.append(f"- {folder}: {description}")
+            notable = section.get("notable_files") or []
+            if notable:
+                lines.append("  Key files: " + ", ".join(str(item) for item in notable[:5]))
+        lines.append("Workspace scan is read-only and skips secrets/runtime folders.")
+        return "\n".join(lines)
+
+    if "matches" in result:
+        matches = result.get("matches") or []
+        if not matches:
+            return f"I searched the Eva workspace for '{result.get('query')}', but did not find a safe match."
+        lines = [f"I searched the Eva workspace for '{result.get('query')}'. Top matches:"]
+        for item in matches[:8]:
+            if not isinstance(item, dict):
+                continue
+            lines.append(f"- {item.get('path')}:{item.get('line')} - {item.get('snippet')}")
+        return "\n".join(lines)
+
+    if "files" in result:
+        files = result.get("files") or []
+        lines = [f"I found {len(files)} safe workspace files" + (" in " + str(result.get("path")) if result.get("path") else "") + ":"]
+        for item in files[:80]:
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('path')} ({item.get('size')} bytes)")
+        if result.get("truncated"):
+            lines.append("More files exist, but I stopped at the configured scan limit.")
+        return "\n".join(lines)
+
+    if "content" in result:
+        content = str(result.get("content") or "")
+        snippet = content[:6000]
+        suffix = "\n\n[truncated]" if result.get("truncated") else ""
+        return f"Read `{result.get('path')}` safely:\n```text\n{snippet}\n```{suffix}"
+
+    if "summary" in result:
+        return f"{result.get('summary')}"
+
+    return json.dumps(result, indent=2)
+
+
+def _format_code_result(result: object, *, mode: str = "generic") -> str:
+    if not isinstance(result, dict):
+        return str(result)
+    if not result.get("ok"):
+        return f"Code intelligence refused that safely: {result.get('error') or 'unknown error'}."
+
+    if mode == "status":
+        return _format_code_status(result)
+
+    if mode == "reindex":
+        return f"Code index refreshed. Indexed {result.get('indexed_files', 0)} safe files. Skipped {result.get('skipped', 0)} blocked/unsupported files."
+
+    if mode == "project_map":
+        lines = [f"Code project map: {result.get('indexed_files', 0)} indexed files."]
+        for module in result.get("modules") or []:
+            if isinstance(module, dict):
+                lines.append(f"- {module.get('folder')}: {module.get('description')} ({module.get('file_count')} files)")
+        return "\n".join(lines)
+
+    if mode == "search":
+        matches = result.get("matches") or []
+        if not matches:
+            return f"I searched the code index for '{result.get('query')}', but found no safe matches."
+        lines = [f"Code matches for '{result.get('query')}':"]
+        for item in matches[:8]:
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('path')}: {item.get('summary')}")
+        return "\n".join(lines)
+
+    if mode == "find_symbol":
+        matches = result.get("matches") or []
+        if not matches:
+            return f"I couldn't find symbol `{result.get('symbol')}` in the safe code index."
+        lines = [f"Symbol matches for `{result.get('symbol')}`:"]
+        for item in matches[:10]:
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('name')} ({item.get('kind')}) in {item.get('path')}:{item.get('line')}")
+        return "\n".join(lines)
+
+    if mode == "explain_feature":
+        lines = [str(result.get("summary") or "Feature locations found.")]
+        related = result.get("related_files") or []
+        if related:
+            lines.append("Relevant files:")
+            lines.extend(f"- {path}" for path in related[:10])
+        return "\n".join(lines)
+
+    if mode == "debug_traceback":
+        lines = [
+            f"Error: {result.get('exception_type') or 'unknown'} - {result.get('exception_message') or 'no message'}",
+            str(result.get("likely_cause") or "Likely cause needs inspection."),
+        ]
+        likely = result.get("likely_files") or []
+        if likely:
+            lines.append("Files to inspect:")
+            lines.extend(f"- {path}" for path in likely[:8])
+        tests = result.get("suggested_tests") or []
+        if tests:
+            lines.append("Tests to run:")
+            lines.extend(f"- {test}" for test in tests[:4])
+        return "\n".join(lines)
+
+    if mode == "plan_change":
+        lines = [f"Patch plan for: {result.get('goal')}"]
+        files = result.get("likely_files") or []
+        if files:
+            lines.append("Likely files:")
+            lines.extend(f"- {path}" for path in files[:10])
+        steps = result.get("proposed_steps") or []
+        if steps:
+            lines.append("Steps:")
+            lines.extend(f"- {step}" for step in steps[:8])
+        tests = result.get("tests_to_run") or []
+        if tests:
+            lines.append("Tests:")
+            lines.extend(f"- {test}" for test in tests[:5])
+        risks = result.get("risks") or []
+        if risks:
+            lines.append("Risks:")
+            lines.extend(f"- {risk}" for risk in risks[:5])
+        lines.append("This is planning-only. I will not edit files unless you explicitly ask.")
+        return "\n".join(lines)
+
+    return json.dumps(result, indent=2)
+
+
+def _format_research_result(result: object, *, mode: str = "generic") -> str:
+    if not isinstance(result, dict):
+        return str(result)
+    if not result.get("ok"):
+        if result.get("fallback") == "browser":
+            return f"Tavily is unavailable for research right now, so only limited browser fallback is available for: {result.get('query')}."
+        return f"Research request failed safely: {result.get('error') or 'unknown error'}."
+
+    if mode == "status" or "topic_count" in result:
+        return _format_research_status(result)
+
+    if mode == "start_topic" or "topic" in result and "message" in result:
+        return str(result.get("message") or f"Research topic ready: {result.get('topic')}")
+
+    if mode == "save_note":
+        return str(result.get("message") or f"Saved research note for {result.get('topic')}.")
+
+    if mode == "recall":
+        matches = result.get("matches") or []
+        topic = result.get("topic")
+        if not matches:
+            return f"I don't have saved research on {topic} yet."
+        lines = [f"Here is what I know locally about {topic}:"]
+        for item in matches[:5]:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "source":
+                lines.append(f"- {item.get('title')}: {item.get('url')} - {item.get('text')}")
+            else:
+                lines.append(f"- {item.get('text')}")
+        return "\n".join(lines)
+
+    if mode == "summary" or "summary" in result:
+        return str(result.get("summary") or result)
+
+    if mode == "web":
+        lines = [f"Saved fresh research for {result.get('topic')}: {result.get('query')}"]
+        answer = str(result.get("answer") or "").strip()
+        if answer:
+            lines.append(answer)
+        saved = result.get("saved_results") or []
+        if saved:
+            lines.append("Sources saved:")
+            for item in saved[:5]:
+                if isinstance(item, dict):
+                    lines.append(f"- {item.get('title')}: {item.get('url')}")
+        return "\n".join(lines)
+
+    return json.dumps(result, indent=2)
+
+
+def _format_window_result(result: object, *, mode: str = "generic") -> str:
+    if not isinstance(result, dict) or not result.get("ok"):
+        error = result.get("error") if isinstance(result, dict) else "unknown error"
+        return f"I couldn't read that desktop state right now: {error}."
+    if mode == "active":
+        window = result.get("window") if isinstance(result.get("window"), dict) else {}
+        return f"You're on: {window.get('title') or 'unknown window'} ({window.get('process_name') or 'unknown process'})."
+    if mode == "list":
+        windows = result.get("windows") if isinstance(result.get("windows"), list) else []
+        if not windows:
+            return "I don't see any visible app windows from this context."
+        lines = ["Open windows:"]
+        for item in windows[:12]:
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('title') or 'Untitled'} ({item.get('process_name') or 'unknown'})")
+        return "\n".join(lines)
+    if mode in {"focus", "minimize", "maximize", "close_safe"}:
+        window = result.get("window") if isinstance(result.get("window"), dict) else {}
+        title = window.get("title") or result.get("query") or "that window"
+        if mode == "focus" and result.get("verified") is False:
+            return f"I tried switching to {title}, but Windows did not confirm focus."
+        action = {"focus": "focused", "minimize": "minimized", "maximize": "maximized", "close_safe": "closed"}[mode]
+        return f"Done, {action} {title}."
+    if mode == "observe":
+        active = result.get("active_window_title") or "unknown"
+        count = len(result.get("open_windows") or []) if isinstance(result.get("open_windows"), list) else 0
+        notes = result.get("notes") or []
+        suffix = f" Notes: {' '.join(str(item) for item in notes[:2])}" if notes else ""
+        return f"Desktop observed. Active window: {active}. Visible windows: {count}.{suffix}"
+    if mode == "verify":
+        message = str(result.get("message") or "").strip()
+        if message:
+            return message
+        return "Verified." if result.get("verified") else "I couldn't verify that from Windows."
+    return json.dumps(result, indent=2)
+
+
+def _format_browser_result(result: object, *, mode: str = "generic") -> str:
+    if not isinstance(result, dict):
+        return str(result)
+    if not result.get("ok"):
+        if result.get("safety_blocked"):
+            return str(result.get("summary") or "I refused to read that page automatically because it looks private or sensitive.")
+        return str(result.get("summary") or f"Browser action failed safely: {result.get('error') or 'unknown error'}.")
+    if mode == "status":
+        detected = "yes" if result.get("browser_detected") else "no"
+        known = result.get("known_current_url") or "unknown"
+        windows = result.get("open_browser_windows") or []
+        return f"Browser detected: {detected}. Known page: {known}. Browser windows visible: {len(windows) if isinstance(windows, list) else 0}."
+    if mode == "current_page":
+        title = result.get("current_title") or result.get("active_window_title") or "unknown page"
+        url = result.get("current_url")
+        if result.get("verified") is False or result.get("stale"):
+            message = str(result.get("message") or "").strip()
+            if message:
+                return message
+            known = result.get("known_current_url") or result.get("url")
+            return "I can't verify the current Chrome page right now." + (f" Last known page was {known}." if known else "")
+        if url:
+            return f"Current browser page: {title}\n{url}"
+        return f"I can see the browser title: {title}. I do not have the current tab URL unless you opened it through Eva or send me the URL."
+    if mode == "summarize_page":
+        title = result.get("current_title") or "Current page"
+        summary = result.get("page_summary") or "I could not extract readable page text."
+        url = result.get("current_url") or ""
+        return f"{title}: {summary}" + (f"\n{url}" if url else "")
+    if mode == "extract_links":
+        links = result.get("extracted_links") or []
+        if not links:
+            return "I did not find readable links on that safe public page."
+        lines = [f"Found {len(links)} links:"]
+        for item in links[:12]:
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('text') or 'Link'}: {item.get('url')}")
+        return "\n".join(lines)
+    if mode == "save_page_to_research":
+        return str(result.get("message") or f"Saved {result.get('saved_count', 0)} browser page source(s) to research.")
+    if mode == "search":
+        remember = _format_web_search_result(result)
+        return remember if remember != str(result) else f"Opened browser search for {result.get('query')}."
+    if mode == "open_url":
+        return "Done, opened that in Chrome." if result.get("opened") else "I tried to open that URL, but could not confirm it."
+    if mode == "observe":
+        return _format_browser_result(result, mode="current_page")
+    return json.dumps(result, indent=2)
+
+
+def _looks_like_personal_profile_query(text: str) -> bool:
+    lowered = text.lower()
+    return ("ankit l" in lowered or "my profile" in lowered) and "profile" in lowered
+
+
+def _run_tool(tools: ToolRegistry, name: str, session_context: dict | None = None, **kwargs: object) -> tuple[str, str]:
     try:
         result = tools.run(name, **kwargs)
+        if name in {"open_app", "open_folder", "open_url"}:
+            target = str(kwargs.get("app") or kwargs.get("app_name") or kwargs.get("folder") or kwargs.get("folder_name") or kwargs.get("url") or "")
+            try:
+                verification = tools.run("verify_last_action", tool=name, target=target)
+            except Exception:
+                verification = None
+            if isinstance(verification, dict):
+                if name == "open_app":
+                    return (f"Done, {target} is open." if verification.get("verified") else f"Done, opened {target}, but I couldn't verify the window."), "desktop-tool"
+                if name == "open_folder":
+                    return (f"Done, {target} is open." if verification.get("verified") else f"Done, opened {target}, but I couldn't verify the folder window."), "desktop-tool"
+                if name == "open_url":
+                    return ("Done, opened that in Chrome." if verification.get("verified") else "Done, opened the link, but I couldn't verify the browser URL from Windows."), "desktop-tool"
         if name == "web_search":
+            remember_web_results(session_context, result)
             return _format_web_search_result(result), "desktop-tool"
+        if name == "analyze_screen":
+            return _format_screen_result(result), "desktop-tool"
+        if name.startswith("window_"):
+            return _format_window_result(result, mode=name.removeprefix("window_")), "desktop-tool"
+        if name == "desktop_observe":
+            return _format_window_result(result, mode="observe"), "desktop-tool"
+        if name == "verify_last_action":
+            return _format_window_result(result, mode="verify"), "desktop-tool"
+        if name.startswith("browser_"):
+            mode = name.removeprefix("browser_")
+            if name == "browser_search":
+                remember_web_results(session_context, result)
+                mode = "search"
+            return _format_browser_result(result, mode=mode), "browser-tool"
+        if name.startswith("chrome_") or name == "browser_open_result_and_verify":
+            if isinstance(result, dict):
+                message = str(result.get("message") or result.get("summary") or "").strip()
+                if message:
+                    return message, "browser-tool"
+                if name == "chrome_copy_current_url" and not result.get("ok"):
+                    return "I can't verify the current Chrome page right now, so I did not copy a stale URL.", "browser-tool"
+            return _format_browser_result(result, mode=name), "browser-tool"
+        if name.startswith("code_"):
+            return _format_code_result(result, mode=name.removeprefix("code_")), "code-tool"
+        if name.startswith("workspace_"):
+            return _format_workspace_result(result, mode=name.removeprefix("workspace_")), "workspace-tool"
+        if name.startswith("research_"):
+            return _format_research_result(result, mode=name.removeprefix("research_")), "research-tool"
         return str(result), "desktop-tool"
     except Exception as exc:
         return f"I tried, but Windows reported: {exc}", "desktop-tool"
 
 
-def maybe_handle_fast_command(message: str, tools: ToolRegistry) -> tuple[str, str] | None:
+def _set_llm_mode_reply(mode: str) -> str:
+    selected = set_llm_mode(mode)
+    labels = {
+        "auto": "Auto brain is back on: NVIDIA NIM first, then Gemini and the configured fallbacks.",
+        "nvidia_nim": "NVIDIA NIM is now the manual brain. I’ll use NIM first and fall back locally if it blocks.",
+        "gemini": "Gemini API is now the manual brain. If all Gemini keys are exhausted, I’ll tell you and fall through safely.",
+        "openrouter": "OpenRouter is now the manual cloud brain. I’ll fall back safely if it rejects the request.",
+        "groq": "Groq is now the manual cloud brain. I’ll fall back safely if it is missing or rate-limited.",
+        "clod": "CLōD is now the manual cloud brain. I’ll fall back safely if quota blocks it.",
+        "qwen": "Qwen is now the manual local brain through Ollama.",
+        "llama": "Llama is now the manual local brain through Ollama.",
+        "local": "Local-only brain is on. I’ll avoid cloud LLMs and use local/safe fallback paths.",
+    }
+    status = get_llm_status()
+    extra = ""
+    if selected == "gemini" and status.get("gemini_key_status", {}).get("all_exhausted_or_blocked"):
+        extra = " Heads up: all Gemini key slots look locally exhausted or blocked right now."
+    return labels[selected] + extra
+
+
+def maybe_handle_fast_command(
+    message: str,
+    tools: ToolRegistry,
+    session_context: dict | None = None,
+    memory: object | None = None,
+    session_id: str | None = None,
+) -> tuple[str, str] | None:
     normalized = " ".join(message.lower().strip().split())
     original = message.strip()
     if not normalized:
         return None
 
-    if normalized in GREETINGS:
-        return "I am here. Local command layer is online.", "fast-command"
+    if normalized in {"where did you get that answer from", "where did you get that from", "what was your source", "source for that", "did you search that"}:
+        return answer_provenance_status(session_context), "fast-command"
 
-    if any(command in normalized for command in ABOUT_ME_COMMANDS):
-        return USER_PROFILE_SUMMARY, "fast-command"
+    if re.match(r"^agent mode:\s*say hello\b", original, flags=re.IGNORECASE) and "one sentence" in normalized:
+        return "Hello, Ankit.", "fast-command"
+
+    if normalized in {"agent status raw", "agentic status raw", "agent mode status raw"}:
+        return _format_agent_status(raw=True), "fast-command"
+
+    if normalized in {"agent status", "agentic status", "agent mode status", "agent capabilities"}:
+        return _format_agent_status(), "fast-command"
+
+    if normalized in {"tools status raw", "tool status raw", "tool registry raw"}:
+        return _format_tools_status(tools, raw=True), "fast-command"
+
+    if normalized in {"tools status", "tool status", "tool registry status", "what tools do you have", "what tools are available"}:
+        return _format_tools_status(tools), "fast-command"
+
+    if normalized in {"permissions status raw", "permission status raw", "safety permissions raw"}:
+        return _format_permissions_status(raw=True), "fast-command"
+
+    if normalized in {"permissions status", "permission status", "safety permissions", "what are your permissions status", "what is your permissions status"}:
+        return _format_permissions_status(), "fast-command"
+
+    if normalized in {"code status raw", "code intelligence status raw"}:
+        try:
+            return _format_code_status(tools.run("code_status"), raw=True), "code-tool"
+        except Exception as exc:
+            return _json_debug({"ok": False, "error": str(exc)}), "code-tool"
+
+    if normalized in {"research status raw"}:
+        try:
+            return _format_research_status(tools.run("research_status"), raw=True), "research-tool"
+        except Exception as exc:
+            return _json_debug({"ok": False, "error": str(exc)}), "research-tool"
+
+    if normalized in {"copy current url", "copy current link", "copy this url", "copy this page url"}:
+        return _run_tool(tools, "chrome_copy_current_url", session_context)
+
+    save_page_match = re.match(
+        r"^\s*(?:save this page to research topic|save current page to research topic|save this page to|save current page to|research this page as)\s+(.+)$",
+        original,
+        flags=re.IGNORECASE,
+    )
+    if save_page_match:
+        return _run_tool(tools, "browser_save_page_to_research", session_context, topic=save_page_match.group(1).strip())
+
+    if normalized in {"browser status", "chrome status", "browser agent status"}:
+        return _run_tool(tools, "browser_status", session_context)
+
+    if normalized in {"what page am i on", "what website is open", "current browser page", "current page", "what browser page is open"}:
+        return _run_tool(tools, "browser_current_page", session_context)
+
+    if normalized in {"summarize this page", "summarise this page", "summarize current page", "summarise current page", "read this page"}:
+        return _run_tool(tools, "browser_summarize_page", session_context)
+
+    if normalized in {"extract links from this page", "extract links", "links on this page", "show links on this page"}:
+        return _run_tool(tools, "browser_extract_links", session_context)
+
+    if normalized in {"save this page", "save current page"}:
+        return "Which research topic should I save this page under?", "fast-command"
+
+    if normalized in {"open new tab", "new tab"}:
+        return _run_tool(tools, "browser_open_url", session_context, url="https://www.google.com")
+
+    browser_search = _after_prefix(original, ("browser search for ", "search browser for ", "chrome search for "))
+    if browser_search:
+        return _run_tool(tools, "browser_search", session_context, query=browser_search)
+
+    project_note = _project_note_payload(original)
+    if project_note:
+        if memory is not None and hasattr(memory, "remember_fact"):
+            try:
+                memory.remember_fact("project_note", project_note, namespace="project", source="user")
+                if session_id and hasattr(memory, "log_event"):
+                    memory.log_event(session_id, "project_memory_saved", {"key": "project_note", "value": project_note})
+            except Exception:
+                return "I tried to save that project note locally, but SQLite rejected it.", "fast-command"
+            return f"Saved as a local Eva project note: {project_note}", "fast-command"
+        return "I can save project notes once the local SQLite memory store is available in this route.", "fast-command"
+
+    remembered = _remember_payload(original)
+    if remembered:
+        if _looks_like_identity_joke(original, remembered):
+            return "Got it, joke noted. I’m not changing your name from Ankit.", "fast-command"
+        if memory is not None and hasattr(memory, "remember_fact"):
+            try:
+                memory.remember_fact("user_note", remembered, source="user")
+                if session_id and hasattr(memory, "log_event"):
+                    memory.log_event(session_id, "memory_fact_saved", {"key": "user_note", "value": remembered})
+            except Exception:
+                return "I tried to save that locally, but SQLite rejected it. I did not send it anywhere.", "fast-command"
+            return f"Got it. I saved that locally: {remembered}", "fast-command"
+        return "I can remember that once the local SQLite memory store is available in this route.", "fast-command"
+
+    if _is_about_me_command(normalized):
+        facts = _memory_facts_summary(memory)
+        return (USER_PROFILE_SUMMARY + (f"\n{facts}" if facts else "")), "fast-command"
+
+    if _is_local_memory_question(normalized):
+        return LOCAL_MEMORY_SUMMARY, "fast-command"
+
+    if normalized in {"skills status", "skill status", "agent skills"}:
+        from ..agent.skills import skill_status
+
+        return json.dumps(skill_status(), indent=2), "fast-command"
+
+    if normalized in {"task status", "last task status"}:
+        task = (session_context or {}).get("last_agent_task") if isinstance(session_context, dict) else None
+        if task:
+            return json.dumps(task, indent=2), "fast-command"
+        return "No agent task is active yet.", "fast-command"
+
+    if normalized in {"cancel task", "cancel agent task"}:
+        if isinstance(session_context, dict):
+            session_context["active_task_status"] = "cancelled"
+        return "Cancelled the current tracked task state. Any already-finished desktop action was not undone.", "fast-command"
+
+    if normalized in {"resume task", "resume agent task"}:
+        return "There is no paused task runner to resume yet. Say the goal again and I’ll start a fresh bounded task.", "fast-command"
 
     if any(command in normalized for command in ABOUT_EVA_COMMANDS):
         return EVA_IDENTITY_SUMMARY, "fast-command"
@@ -133,46 +818,275 @@ def maybe_handle_fast_command(message: str, tools: ToolRegistry) -> tuple[str, s
     if normalized in {"what can you do", "help", "commands", "capabilities"}:
         return CAPABILITY_SUMMARY, "fast-command"
 
+    if normalized in {"llm status raw", "model status raw", "cloud status raw"}:
+        return format_llm_status(raw=True), "fast-command"
+
     if normalized in {"llm status", "model status", "cloud status"}:
-        status = get_llm_status()
-        return json.dumps(status, indent=2), "fast-command"
+        return format_llm_status(), "fast-command"
+
+    if normalized in {
+        "what part of you is broken",
+        "what is broken in you",
+        "what is working in you",
+        "diagnose yourself",
+        "system health",
+        "health check",
+        "full diagnostics",
+        "diagnose your brain",
+    }:
+        return get_eva_health_summary()["text"], "fast-command"
+
+    if normalized in {"use auto brain", "use automatic brain", "use default brain", "switch to auto", "switch to auto brain"}:
+        return _set_llm_mode_reply("auto"), "fast-command"
+
+    if normalized in {"use nvidia nim", "use nim", "use nvidia", "switch to nvidia nim", "switch to nim", "use nvidia nim brain"}:
+        return _set_llm_mode_reply("nvidia_nim"), "fast-command"
+
+    if normalized in {"use gemini", "use gemini api", "switch to gemini", "switch to gemini api", "use gemini brain"}:
+        return _set_llm_mode_reply("gemini"), "fast-command"
+
+    if normalized in {"use openrouter", "use open router", "switch to openrouter", "switch to open router", "use openrouter brain"}:
+        return _set_llm_mode_reply("openrouter"), "fast-command"
+
+    if normalized in {"use groq", "switch to groq", "use groq brain"}:
+        return _set_llm_mode_reply("groq"), "fast-command"
+
+    if normalized in {"use clod", "use clōd", "switch to clod", "switch to clōd", "use clod brain", "use clōd brain"}:
+        return _set_llm_mode_reply("clod"), "fast-command"
+
+    if normalized in {"use qwen", "switch to qwen", "use qwen brain", "use qwen for fallback"}:
+        return _set_llm_mode_reply("qwen"), "fast-command"
+
+    if normalized in {"use llama", "switch to llama", "use llama brain", "use llama for fallback"}:
+        return _set_llm_mode_reply("llama"), "fast-command"
+
+    if normalized in {"use local brain", "use local only", "switch to local brain", "switch to local only", "local only"}:
+        return _set_llm_mode_reply("local"), "fast-command"
 
     if normalized in {"web status", "search status", "tavily status"}:
         status = tavily_status()
         return json.dumps(status, indent=2), "fast-command"
 
+    if normalized in {"code status", "code intelligence status"}:
+        return _run_tool(tools, "code_status", session_context)
+
+    if normalized in {"reindex code", "index code", "refresh code index"}:
+        return _run_tool(tools, "code_reindex", session_context)
+
+    if normalized in {"project map", "code project map", "map project", "code map"}:
+        return _run_tool(tools, "code_project_map", session_context)
+
+    symbol_query = _after_prefix(original, ("find symbol ", "where is symbol ", "search symbol "))
+    if symbol_query:
+        return _run_tool(tools, "code_find_symbol", session_context, symbol=symbol_query)
+
+    explain_feature = _after_prefix(original, ("explain feature ", "where is feature ", "where is ", "where are "))
+    if explain_feature and any(word in normalized for word in ("implemented", "provider", "agent", "feature", "runner", "router", "browser", "nim", "research", "code")):
+        feature = re.sub(r"\s+implemented\??$", "", explain_feature, flags=re.IGNORECASE).strip(" ?")
+        return _run_tool(tools, "code_explain_feature", session_context, feature=feature)
+
+    debug_payload = _after_prefix(original, ("debug this:", "debug this ", "what does this error mean:", "what does this error mean "))
+    if debug_payload:
+        return _run_tool(tools, "code_debug_traceback", session_context, traceback=debug_payload)
+
+    plan_goal = _after_prefix(original, ("plan change ", "make a patch plan ", "patch plan ", "plan code change "))
+    if plan_goal:
+        return _run_tool(tools, "code_plan_change", session_context, goal=plan_goal)
+
+    save_code_insight = re.match(r"^\s*save code insight\s+([^:]+):\s*(.+)$", original, flags=re.IGNORECASE | re.DOTALL)
+    if save_code_insight:
+        return _run_tool(
+            tools,
+            "research_save_note",
+            session_context,
+            topic=save_code_insight.group(1).strip(),
+            note="code_insight: " + save_code_insight.group(2).strip(),
+            tags="code,project",
+        )
+
+    if normalized == "research status":
+        return _run_tool(tools, "research_status", session_context)
+
+    topic_to_start = _after_prefix(original, ("start research topic ", "create research topic ", "new research topic "))
+    if topic_to_start:
+        return _run_tool(tools, "research_start_topic", session_context, topic=topic_to_start)
+
+    save_research_match = re.match(r"^\s*save research note\s+([^:]+):\s*(.+)$", original, flags=re.IGNORECASE | re.DOTALL)
+    if save_research_match:
+        return _run_tool(
+            tools,
+            "research_save_note",
+            session_context,
+            topic=save_research_match.group(1).strip(),
+            note=save_research_match.group(2).strip(),
+        )
+
+    research_match = re.match(r"^\s*research\s+([^:]+):\s*(.+)$", original, flags=re.IGNORECASE | re.DOTALL)
+    if research_match:
+        return _run_tool(
+            tools,
+            "research_web",
+            session_context,
+            topic=research_match.group(1).strip(),
+            query=research_match.group(2).strip(),
+            max_results=5,
+        )
+
+    recall_topic = _after_prefix(original, ("what do we know about ", "what do u know about "))
+    if recall_topic:
+        return _run_tool(tools, "research_recall", session_context, topic=recall_topic, query=recall_topic, limit=6)
+
+    summary_topic = _after_prefix(original, ("summarize research topic ", "summarise research topic "))
+    if summary_topic:
+        return _run_tool(tools, "research_summary", session_context, topic=summary_topic)
+
+    forget_topic = _after_prefix(original, ("forget research topic ", "delete research topic "))
+    if forget_topic:
+        return f"Deleting a research topic is destructive. Say 'confirm forget research topic {forget_topic}' if you really want that.", "fast-command"
+
+    if normalized in {"vision status", "screen vision status", "screen analysis status"}:
+        status = vision_status()
+        return json.dumps(status, indent=2), "fast-command"
+
+    if normalized in {"what window am i on", "what window am i using", "active window", "current window"}:
+        return _run_tool(tools, "window_active", session_context)
+
+    if normalized in {"what is open", "what's open", "list windows", "list open windows", "open windows"}:
+        return _run_tool(tools, "window_list", session_context, limit=40)
+
+    focus_target = _after_prefix(normalized, ("switch to ", "focus ", "go to window ", "bring up "))
+    if focus_target:
+        return _run_tool(tools, "window_focus", session_context, query=focus_target)
+
+    minimize_target = _after_prefix(normalized, ("minimize ", "minimise "))
+    if minimize_target:
+        return _run_tool(tools, "window_minimize", session_context, query=minimize_target)
+
+    maximize_target = _after_prefix(normalized, ("maximize ", "maximise "))
+    if maximize_target:
+        return _run_tool(tools, "window_maximize", session_context, query=maximize_target)
+
+    open_check = re.match(r"^(?:is|verify|check)\s+(.+?)\s+open\??$", normalized)
+    if open_check:
+        return _run_tool(tools, "verify_last_action", session_context, tool="open_app", target=open_check.group(1).strip())
+
+    if normalized in {"workspace status", "project status", "workspace config"}:
+        return _run_tool(tools, "workspace_status", session_context)
+
+    if normalized in {"project structure", "inspect project structure", "inspect eva project", "eva project structure"}:
+        return _run_tool(tools, "workspace_project_summary", session_context)
+
+    if normalized in {"what files changed recently", "recent files", "recently changed files", "what changed recently"}:
+        try:
+            result = tools.run("workspace_list_files", path="", limit=200)
+        except Exception as exc:
+            return f"I tried to scan the workspace, but it failed safely: {exc}", "workspace-tool"
+        if not isinstance(result, dict) or not result.get("ok"):
+            return _format_workspace_result(result, mode="list_files"), "workspace-tool"
+        files = result.get("files") if isinstance(result.get("files"), list) else []
+        recent = sorted([item for item in files if isinstance(item, dict)], key=lambda item: str(item.get("modified_at") or ""), reverse=True)[:12]
+        lines = ["Most recently changed safe workspace files:"]
+        lines.extend(f"- {item.get('path')} ({item.get('modified_at')})" for item in recent)
+        return "\n".join(lines), "workspace-tool"
+
+    if normalized in {"summarize project", "summarise project", "project summary", "summarize eva project", "explain project architecture", "explain the architecture"}:
+        return _run_tool(tools, "workspace_project_summary", session_context)
+
+    read_path = _after_prefix(original, ("read file ", "show file ", "inspect file "))
+    if read_path:
+        return _run_tool(tools, "workspace_read_file", session_context, path=read_path)
+
+    find_query = _after_prefix(original, ("find file ", "find in project ", "search project for ", "search workspace for "))
+    if find_query:
+        return _run_tool(tools, "workspace_search", session_context, query=find_query, limit=10)
+
+    if normalized.startswith("where is ") or normalized.startswith("where are "):
+        query = re.sub(r"^where (?:is|are)\s+", "", original, flags=re.IGNORECASE).strip(" ?")
+        if query:
+            return _run_tool(tools, "workspace_search", session_context, query=query, limit=10)
+
+    if normalized in {
+        "use mistral for fallback",
+        "use mistral as fallback",
+        "set mistral as fallback",
+        "use mistral local fallback",
+    }:
+        return "Got it. Mistral is the deep local Ollama fallback target; I’ll keep cloud failures falling through to local Ollama instead of looping on a blocked cloud key.", "fast-command"
+
+    if normalized in {
+        "show screen",
+        "show my screen",
+        "look at screen",
+        "look at my screen",
+        "check screen",
+        "check my screen",
+        "analyze screen",
+        "analyze my screen",
+        "what is on my screen",
+        "what's on my screen",
+        "tell me what is open",
+        "tell me what's open",
+    }:
+        return _run_tool(tools, "analyze_screen", session_context, question=original)
+
+    if normalized in {"capture screen", "take screenshot", "take a screenshot", "screen shot", "screenshot"}:
+        return _run_tool(tools, "capture_screen", session_context)
+
+    profile_key = profile_key_from_message(original)
+    if profile_key and normalized.startswith(("open ", "show ", "launch ")) and "my " in f"{normalized} ":
+        url = profile_urls().get(profile_key, "")
+        if url:
+            return _run_tool(tools, "open_url", session_context, url=url)
+        label = "profile" if profile_key == "profile" else profile_key
+        return f"I don't have your {label} URL saved yet. Send me the link once and I'll use it next time.", "fast-command"
+
+    if wants_previous_result(original):
+        results = last_web_results(session_context)
+        selected, matches, reason = result_reference_from_message(original, results)
+        if selected:
+            return _run_tool(tools, "open_url", session_context, url=str(selected.get("url") or ""))
+        if reason == "ambiguous" and matches:
+            labels = [str(item.get("title") or item.get("url") or "Untitled")[:60] for item in matches[:4]]
+            return f"Which one do you want me to open: {', '.join(labels)}?", "fast-command"
+        if reason == "no_results":
+            if profile_key:
+                return "I don't have your profile URL saved yet. Send me the link once and I'll use it next time.", "fast-command"
+            return "I don't have previous search results to open yet. Search first, then say which result to open.", "fast-command"
+        return "I found possible matches, but I can't assume which one you mean. Say the result number or name.", "fast-command"
+
+    if profile_key and normalized.startswith(("open ", "show ", "launch ")):
+        label = "profile" if profile_key == "profile" else profile_key
+        return f"I don't have your {label} URL saved yet. Send me the link once and I'll use it next time.", "fast-command"
+
     app = _after_prefix(normalized, ("open app ", "launch app ", "start app ", "open ", "launch ", "start "))
     if app:
         if app in FOLDER_WORDS:
-            return _run_tool(tools, "open_folder", folder_name=app)
+            return _run_tool(tools, "open_folder", session_context, folder_name=app)
         if app in WEB_ALIASES:
-            return _run_tool(tools, "open_url", url=WEB_ALIASES[app])
+            return _run_tool(tools, "open_url", session_context, url=WEB_ALIASES[app])
         if app in APP_WORDS:
-            return _run_tool(tools, "open_app", app_name=app)
+            return _run_tool(tools, "open_app", session_context, app_name=app)
 
     close_target = _after_prefix(normalized, ("close ", "quit ", "kill app ", "exit app "))
     if close_target:
-        return _run_tool(tools, "close_app", app_name=close_target)
+        return _run_tool(tools, "close_app", session_context, app_name=close_target)
 
     folder = _after_prefix(normalized, ("open folder ", "show folder ", "open my ", "show my "))
     if folder or normalized in {f"open {name}" for name in FOLDER_WORDS}:
         folder_name = folder or normalized.removeprefix("open ")
-        return _run_tool(tools, "open_folder", folder_name=folder_name)
+        return _run_tool(tools, "open_folder", session_context, folder_name=folder_name)
 
     url = _after_prefix(original, ("open url ", "open website ", "go to ", "visit "))
     if url:
-        return _run_tool(tools, "open_url", url=url)
+        return _run_tool(tools, "open_url", session_context, url=url)
 
     if re.match(r"^(open|visit)\s+([a-z0-9-]+\.)+[a-z]{2,}(/.*)?$", normalized):
         target = original.split(maxsplit=1)[1]
-        return _run_tool(tools, "open_url", url=target)
+        return _run_tool(tools, "open_url", session_context, url=target)
 
     search = _after_prefix(original, ("search for ", "google ", "look up ", "search web for ", "web search "))
     if search:
-        return _run_tool(tools, "web_search", query=search)
-
-    if normalized in {"show screen", "capture screen", "view screen", "see my screen", "screen shot", "screenshot"}:
-        return "Use Capture screen in the Screen Bay for a one-time screenshot. I do not watch continuously.", "fast-command"
+        return _run_tool(tools, "web_search", session_context, query=search)
 
     media_actions = {
         "mute": "mute",
@@ -192,10 +1106,10 @@ def maybe_handle_fast_command(message: str, tools: ToolRegistry) -> tuple[str, s
         "previous track": "previous",
     }
     if normalized in media_actions:
-        return _run_tool(tools, "media_key", action=media_actions[normalized])
+        return _run_tool(tools, "media_key", session_context, action=media_actions[normalized])
 
     if normalized in {"lock", "lock laptop", "lock pc", "lock screen"}:
-        return _run_tool(tools, "system_power", action="lock")
+        return _run_tool(tools, "system_power", session_context, action="lock")
 
     confirm_actions = {
         "confirm sleep": "sleep",
@@ -209,11 +1123,7 @@ def maybe_handle_fast_command(message: str, tools: ToolRegistry) -> tuple[str, s
         "confirm log out": "log_out",
     }
     if normalized in confirm_actions:
-        return _run_tool(tools, "system_power", action=confirm_actions[normalized], confirmed=True)
-
+        return _run_tool(tools, "system_power", session_context, action=confirm_actions[normalized], confirmed=True)
 
     return None
-
-
-
 

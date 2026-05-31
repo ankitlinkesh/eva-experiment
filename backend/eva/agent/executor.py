@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .planner import PlannedToolCall
+from .action_model import AgentAction
+from ..security.permission_gate import PermissionContext, evaluate_action
 from ..tools.registry import ToolRegistry
 
 
@@ -62,6 +64,18 @@ class ToolExecutor:
                 action=action,
             )
 
+        permission = self._permission_decision(spec, call.tool, args)
+        if permission.decision in {"ask_confirmation", "ask_override"}:
+            return ToolExecutionResult(
+                ok=False,
+                tool=call.tool,
+                error=permission.reason,
+                requires_confirmation=True,
+                action=call.tool,
+            )
+        if permission.decision == "hard_block":
+            return ToolExecutionResult(ok=False, tool=call.tool, error=permission.reason)
+
         try:
             result = self.registry.run(call.tool, **args)
             return ToolExecutionResult(ok=True, tool=call.tool, result=result)
@@ -96,3 +110,22 @@ class ToolExecutor:
                 return f"Argument {key} has unsupported value: {value}"
 
         return None
+
+    def _permission_decision(self, spec, tool_name: str, args: dict[str, Any]):
+        confirmed = bool(args.get("confirmed"))
+        action = AgentAction(
+            tool_name=tool_name,
+            action_type=getattr(spec, "action_type", "SAFE_LOCAL_READ"),
+            description=getattr(spec, "description", tool_name),
+            params=args,
+            risk_categories=list(getattr(spec, "risk_categories", ("SAFE_LOCAL_READ",))),
+            destructive=getattr(spec, "action_type", "") in {"DESTRUCTIVE_FILE_ACTION", "SYSTEM_CHANGE"},
+            privacy_sensitive=getattr(spec, "action_type", "") in {"PRIVACY_SCREEN_READ", "PRIVACY_FILE_READ", "PRIVACY_CHAT_READ"},
+            external_visible=getattr(spec, "action_type", "") in {"EXTERNAL_MESSAGE_SEND", "EXTERNAL_POST"},
+            verification={"method": getattr(spec, "verification_method", "command_result_success")},
+        )
+        context = PermissionContext(
+            user_confirmed=confirmed,
+            override_granted=confirmed,
+        )
+        return evaluate_action(action, context)

@@ -10,23 +10,86 @@ from ..core.config import ModelSettings
 from .providers.clod import ClodProvider
 from .providers.gemini import GeminiProvider
 from .providers.groq import GroqEmergencyProvider, GroqProvider
+from .providers.nvidia_nim import NvidiaNIMProvider, nvidia_nim_models_for_purpose, nvidia_nim_role_models
 from .providers.ollama import OllamaProvider
 from .providers.openrouter import OpenRouterProvider
 from .rate_limiter import LLMRateLimiter, provider_limits, provider_token_limits
 from .types import LLMAttempt, LLMProvider, LLMResponse, Message, RoutedLLMResponse
 
-DEFAULT_PROVIDER_ORDER = ["gemini", "groq", "openrouter", "clod"]
+DEFAULT_PROVIDER_ORDER = ["nvidia_nim", "gemini", "openrouter", "groq", "clod", "ollama"]
+LLM_MODES = {"auto", "nvidia_nim", "gemini", "openrouter", "groq", "clod", "qwen", "llama", "local"}
 PROVIDER_CLASSES = {
     "gemini": GeminiProvider,
     "groq": GroqProvider,
     "openrouter": OpenRouterProvider,
+    "nvidia_nim": NvidiaNIMProvider,
     "clod": ClodProvider,
     "ollama": OllamaProvider,
 }
 
 
+def llm_mode() -> str:
+    mode = os.environ.get("EVA_LLM_MODE", "auto").strip().lower()
+    return mode if mode in LLM_MODES else "auto"
+
+
+def set_llm_mode(mode: str) -> str:
+    normalized = mode.strip().lower()
+    aliases = {
+        "automatic": "auto",
+        "default": "auto",
+        "cloud": "auto",
+        "local only": "local",
+        "local brain": "local",
+        "nvidia": "nvidia_nim",
+        "nvidia nim": "nvidia_nim",
+        "nim": "nvidia_nim",
+        "google": "gemini",
+        "gemini api": "gemini",
+        "open router": "openrouter",
+        "openrouter": "openrouter",
+        "groq": "groq",
+        "clod": "clod",
+        "clōd": "clod",
+        "qwen local": "qwen",
+        "llama local": "llama",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in LLM_MODES:
+        supported = ", ".join(sorted(LLM_MODES))
+        raise ValueError(f"Unsupported LLM mode: {mode}. Supported: {supported}.")
+    os.environ["EVA_LLM_MODE"] = normalized
+    if normalized in {"qwen", "llama", "local"}:
+        os.environ["EVA_USE_OLLAMA_FOR_PLANNER"] = "true"
+    else:
+        os.environ["EVA_USE_OLLAMA_FOR_PLANNER"] = "false"
+    return normalized
+
+
+def ollama_model_for_mode(settings: ModelSettings) -> str:
+    mode = llm_mode()
+    if mode == "qwen":
+        return os.environ.get("EVA_OLLAMA_QWEN_MODEL", "").strip() or settings.fast_model or "qwen2.5:1.5b"
+    if mode == "llama":
+        return os.environ.get("EVA_OLLAMA_LLAMA_MODEL", "").strip() or "llama3.1:8b"
+    return os.environ.get("EVA_OLLAMA_FALLBACK_MODEL", "").strip() or settings.fast_model or settings.ollama_model
+
+
 def provider_order() -> list[str]:
-    raw = os.environ.get("EVA_CLOUD_PROVIDER_ORDER", "gemini,groq,openrouter,clod")
+    mode = llm_mode()
+    if mode in {"qwen", "llama", "local"}:
+        return ["ollama"]
+    auto_order = _auto_provider_order()
+    if mode in {"nvidia_nim", "gemini", "openrouter", "groq", "clod"}:
+        if _provider_configured(mode) and not _provider_currently_blocked(mode):
+            ordered = [mode] + [name for name in auto_order if name != mode]
+            return ordered
+        return auto_order
+    return auto_order
+
+
+def _auto_provider_order() -> list[str]:
+    raw = os.environ.get("EVA_CLOUD_PROVIDER_ORDER", ",".join(DEFAULT_PROVIDER_ORDER))
     allow_cloud = os.environ.get("EVA_ALLOW_CLOUD_FALLBACK", "true").strip().lower() not in {"0", "false", "no", "off"}
     names = [item.strip().lower() for item in raw.split(",") if item.strip()]
     if not names:
@@ -39,6 +102,57 @@ def provider_order() -> list[str]:
     if "ollama" not in ordered:
         ordered.append("ollama")
     return ordered
+
+
+def _provider_configured(name: str) -> bool:
+    if name == "gemini":
+        return _gemini_key_count() > 0
+    if name == "nvidia_nim":
+        return _env_has_key("NVIDIA_NIM_API_KEY")
+    if name == "openrouter":
+        return _env_has_key("OPENROUTER_API_KEY")
+    if name == "groq":
+        return _env_has_key("GROQ_API_KEY")
+    if name == "clod":
+        return _env_has_key("CLOD_API_KEY")
+    if name == "ollama":
+        return True
+    return False
+
+
+def _provider_current_model(name: str) -> str:
+    settings = ModelSettings()
+    if name == "gemini":
+        return os.environ.get("GEMINI_MODEL", settings.smart_model or "gemini-2.5-flash")
+    if name == "nvidia_nim":
+        return os.environ.get("NVIDIA_NIM_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
+    if name == "openrouter":
+        return os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free")
+    if name == "groq":
+        return os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    if name == "clod":
+        return os.environ.get("CLOD_MODEL", "DeepSeek V3")
+    return ollama_model_for_mode(settings)
+
+
+def _provider_currently_blocked(name: str) -> bool:
+    if name == "ollama":
+        return False
+    model = _provider_current_model(name)
+    usage = LLMRateLimiter().status()
+    now = int(time.time())
+    for key, entry in usage.items():
+        if not isinstance(entry, dict) or not str(key).startswith(f"{name}:"):
+            continue
+        tracked_model = str(key).split(":", 1)[1]
+        if name == "gemini":
+            if not tracked_model.startswith(model):
+                continue
+        elif tracked_model != model:
+            continue
+        if int(entry.get("blocked_until") or 0) > now:
+            return True
+    return False
 
 
 def build_provider(name: str, settings: ModelSettings) -> LLMProvider | None:
@@ -76,7 +190,7 @@ def _normalized_attempt_error(response: LLMResponse) -> str | None:
         return response.error
     if response.rate_limited or response.status_code == 429:
         return "rate_limited_429"
-    if response.error in {"missing_api_key", "empty_response", "invalid_planner_json"}:
+    if response.error in {"missing_api_key", "empty_response", "invalid_planner_json", "skipped_for_planner"}:
         return response.error
     if response.error and response.error.startswith("soft_limit_exhausted"):
         return "soft_limit_exhausted"
@@ -130,6 +244,8 @@ async def _call_provider(
             rate_limited=False,
             raw_headers=response.raw_headers,
         )
+    if getattr(provider, "uses_internal_rate_limits", False):
+        return response, _is_retryable_failure(response)
     if response.ok:
         limiter.record_success(provider.name, provider.model, estimated_tokens=estimate)
     else:
@@ -145,6 +261,48 @@ async def _call_provider(
     return response, _is_retryable_failure(response)
 
 
+async def _try_nvidia_nim_models(
+    settings: ModelSettings,
+    limiter: LLMRateLimiter,
+    attempts: list[LLMAttempt],
+    messages: list[Message],
+    *,
+    purpose: str,
+    temperature: float,
+    max_tokens: int,
+    estimated_tokens: int,
+) -> RoutedLLMResponse | None:
+    models = nvidia_nim_models_for_purpose(purpose)
+    if not models:
+        return None
+
+    first_provider = NvidiaNIMProvider(settings, model=models[0])
+    if not first_provider.available():
+        response = LLMResponse(provider="nvidia_nim", model=models[0], ok=False, error="missing_api_key")
+        attempts.append(_attempt_from_response(response, purpose, fallback_used=bool(attempts)))
+        return None
+
+    for model in models:
+        provider = NvidiaNIMProvider(settings, model=model)
+        allowed, reason = limiter.can_call("nvidia_nim", model, estimated_tokens=estimated_tokens)
+        if not allowed:
+            response = LLMResponse(provider="nvidia_nim", model=model, ok=False, error=reason)
+            attempts.append(_attempt_from_response(response, purpose, fallback_used=bool(attempts)))
+            continue
+
+        response, retryable = await _call_provider(provider, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens)
+        if response.ok and response.text.strip():
+            attempts.append(_attempt_from_response(response, purpose, selected_provider="nvidia_nim", fallback_used=bool(attempts)))
+            return RoutedLLMResponse(response=response, attempts=attempts, fallback_occurred=len(attempts) > 1)
+
+        attempts.append(_attempt_from_response(response, purpose, fallback_used=bool(attempts)))
+        if response.status_code in {401, 403}:
+            break
+        if not retryable:
+            break
+    return None
+
+
 async def complete_with_fallback(
     messages: list[Message],
     settings: ModelSettings,
@@ -158,8 +316,28 @@ async def complete_with_fallback(
     estimate = _estimated_tokens(messages, max_tokens)
 
     for name in provider_order():
+        if name == "nvidia_nim":
+            routed = await _try_nvidia_nim_models(
+                settings,
+                limiter,
+                attempts,
+                messages,
+                purpose=purpose,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                estimated_tokens=estimate,
+            )
+            if routed is not None:
+                return routed
+            continue
+
         provider = build_provider(name, settings)
         if provider is None:
+            continue
+
+        if purpose == "planner" and name == "ollama" and llm_mode() not in {"qwen", "llama"} and os.environ.get("EVA_USE_OLLAMA_FOR_PLANNER", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+            response = LLMResponse(provider=name, model=getattr(provider, "model", ""), ok=False, error="skipped_for_planner")
+            attempts.append(_attempt_from_response(response, purpose, fallback_used=bool(attempts)))
             continue
 
         if not provider.available():
@@ -167,23 +345,24 @@ async def complete_with_fallback(
             attempts.append(_attempt_from_response(response, purpose, fallback_used=bool(attempts)))
             continue
 
-        allowed, reason = limiter.can_call(name, getattr(provider, "model", None), estimated_tokens=estimate)
-        if not allowed:
-            response = LLMResponse(provider=name, model=getattr(provider, "model", ""), ok=False, error=reason)
-            attempts.append(_attempt_from_response(response, purpose, fallback_used=bool(attempts)))
-            if name == "groq":
-                emergency = GroqEmergencyProvider(settings)
-                if emergency.available() and emergency.model != provider.model:
-                    allowed_emergency, emergency_reason = limiter.can_call("groq", emergency.model, estimated_tokens=estimate)
-                    if allowed_emergency:
-                        emergency_response, _ = await _call_provider(emergency, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens)
-                        if emergency_response.ok and emergency_response.text.strip():
-                            attempts.append(_attempt_from_response(emergency_response, purpose, selected_provider="groq", fallback_used=True))
-                            return RoutedLLMResponse(response=emergency_response, attempts=attempts, fallback_occurred=True)
-                        attempts.append(_attempt_from_response(emergency_response, purpose, fallback_used=True))
-                    else:
-                        attempts.append(LLMAttempt(provider="groq", model=emergency.model, purpose=purpose, ok=False, error=emergency_reason, fallback_used=True))
-            continue
+        if not getattr(provider, "uses_internal_rate_limits", False):
+            allowed, reason = limiter.can_call(name, getattr(provider, "model", None), estimated_tokens=estimate)
+            if not allowed:
+                response = LLMResponse(provider=name, model=getattr(provider, "model", ""), ok=False, error=reason)
+                attempts.append(_attempt_from_response(response, purpose, fallback_used=bool(attempts)))
+                if name == "groq":
+                    emergency = GroqEmergencyProvider(settings)
+                    if emergency.available() and emergency.model != provider.model:
+                        allowed_emergency, emergency_reason = limiter.can_call("groq", emergency.model, estimated_tokens=estimate)
+                        if allowed_emergency:
+                            emergency_response, _ = await _call_provider(emergency, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens)
+                            if emergency_response.ok and emergency_response.text.strip():
+                                attempts.append(_attempt_from_response(emergency_response, purpose, selected_provider="groq", fallback_used=True))
+                                return RoutedLLMResponse(response=emergency_response, attempts=attempts, fallback_occurred=True)
+                            attempts.append(_attempt_from_response(emergency_response, purpose, fallback_used=True))
+                        else:
+                            attempts.append(LLMAttempt(provider="groq", model=emergency.model, purpose=purpose, ok=False, error=emergency_reason, fallback_used=True))
+                continue
 
         response, retryable = await _call_provider(provider, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens)
         if response.ok and response.text.strip():
@@ -218,6 +397,15 @@ def _env_has_key(name: str) -> bool:
     return bool(os.environ.get(name, "").strip())
 
 
+def _gemini_key_count() -> int:
+    keys: list[str] = []
+    for raw in (os.environ.get("GEMINI_API_KEY", ""), os.environ.get("GEMINI_API_KEY_2", ""), os.environ.get("GEMINI_API_KEYS", "")):
+        for token in re.findall(r"AIza[0-9A-Za-z_-]{35}", raw or ""):
+            if token not in keys:
+                keys.append(token)
+    return len(keys)
+
+
 
 def _sanitize_status_error(error: object) -> str:
     text = str(error or "")[:500]
@@ -241,6 +429,48 @@ def _sanitize_usage_state(usage: dict) -> dict:
             clean["last_error"] = _sanitize_status_error(clean.get("last_error"))
         sanitized[key] = clean
     return sanitized
+
+
+def _gemini_key_status(usage: dict, model: str) -> dict:
+    key_count = _gemini_key_count()
+    rpm, rpd = provider_limits("gemini", model)
+    tpm, _ = provider_token_limits("gemini", model)
+    now = int(time.time())
+    slots = []
+    exhausted_count = 0
+    for index in range(1, key_count + 1):
+        slot_model = f"{model}[key{index}]"
+        entry = usage.get(f"gemini:{slot_model}", {})
+        if not isinstance(entry, dict):
+            entry = {}
+        blocked_until = int(entry.get("blocked_until") or 0)
+        reasons = []
+        if blocked_until > now:
+            reasons.append(f"blocked_until:{blocked_until}")
+        if rpm is not None and int(entry.get("requests_this_minute") or 0) >= rpm:
+            reasons.append("soft_limit_exhausted:rpm")
+        if rpd is not None and int(entry.get("requests_today") or 0) >= rpd:
+            reasons.append("soft_limit_exhausted:rpd")
+        if tpm is not None and int(entry.get("estimated_tokens_this_minute") or 0) >= tpm:
+            reasons.append("soft_limit_exhausted:tpm")
+        exhausted = bool(reasons)
+        exhausted_count += 1 if exhausted else 0
+        slots.append(
+            {
+                "slot": index,
+                "model": slot_model,
+                "available": not exhausted,
+                "reasons": reasons,
+                "blocked_until": blocked_until if blocked_until > now else None,
+            }
+        )
+    return {
+        "key_slots": key_count,
+        "all_exhausted_or_blocked": bool(key_count and exhausted_count == key_count),
+        "slots": slots,
+    }
+
+
 def get_llm_status(settings: ModelSettings | None = None) -> dict:
     settings = settings or ModelSettings()
     limiter = LLMRateLimiter()
@@ -250,13 +480,15 @@ def get_llm_status(settings: ModelSettings | None = None) -> dict:
         "groq": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
         "groq_fallback": os.environ.get("GROQ_FALLBACK_MODEL", "llama-3.1-8b-instant"),
         "openrouter": os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free"),
+        "nvidia_nim": os.environ.get("NVIDIA_NIM_MODEL", "nvidia/nemotron-3-nano-30b-a3b"),
         "clod": os.environ.get("CLOD_MODEL", "DeepSeek V3"),
-        "ollama": settings.fast_model or settings.ollama_model,
+        "ollama": ollama_model_for_mode(settings),
     }
     keys = {
-        "gemini": _env_has_key("GEMINI_API_KEY"),
+        "gemini": _gemini_key_count() > 0,
         "groq": _env_has_key("GROQ_API_KEY"),
         "openrouter": _env_has_key("OPENROUTER_API_KEY"),
+        "nvidia_nim": _env_has_key("NVIDIA_NIM_API_KEY"),
         "clod": _env_has_key("CLOD_API_KEY"),
         "ollama": True,
     }
@@ -273,6 +505,7 @@ def get_llm_status(settings: ModelSettings | None = None) -> dict:
         "groq": models["groq"],
         "groq_fallback": models["groq_fallback"],
         "openrouter": models["openrouter"],
+        "nvidia_nim": models["nvidia_nim"],
         "clod": models["clod"],
     }.items():
         base_provider = "groq" if provider == "groq_fallback" else provider
@@ -282,10 +515,26 @@ def get_llm_status(settings: ModelSettings | None = None) -> dict:
     warnings = []
     if models["openrouter"] and not str(models["openrouter"]).endswith(":free"):
         warnings.append("OpenRouter model does not end with :free and may use paid credits.")
+    gemini_status = _gemini_key_status(usage, models["gemini"])
+    if gemini_status["all_exhausted_or_blocked"]:
+        warnings.append("All configured Gemini key slots are locally exhausted or blocked right now; Eva will use fallback mode/provider.")
     return {
+        "active_mode": llm_mode(),
         "provider_order": provider_order(),
         "configured_keys": keys,
+        "configured_key_slots": {"gemini": _gemini_key_count()},
         "models": models,
+        "nvidia_nim": {
+            "configured": keys["nvidia_nim"],
+            "base_url": os.environ.get("NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+            "primary_model": models["nvidia_nim"],
+            "fallback_models": nvidia_nim_models_for_purpose("planner")[1:],
+            "role_models": nvidia_nim_role_models(),
+            "soft_rpm": limits["nvidia_nim"]["soft_rpm"],
+            "soft_rpd": limits["nvidia_nim"]["soft_rpd"],
+            "usage": {key: value for key, value in usage.items() if key.startswith("nvidia_nim:")},
+        },
+        "gemini_key_status": gemini_status,
         "usage": usage,
         "blocked_providers": blocked,
         "last_errors": last_errors,

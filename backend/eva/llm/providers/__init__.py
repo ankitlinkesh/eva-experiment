@@ -1,3 +1,10 @@
 ﻿from __future__ import annotations
 
-# Provider modules are imported by backend.eva.llm.router.
+__all__ = [
+    "clod",
+    "gemini",
+    "groq",
+    "nvidia_nim",
+    "ollama",
+    "openrouter",
+]

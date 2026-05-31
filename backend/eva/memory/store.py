@@ -42,6 +42,62 @@ class MemoryStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memories (
+                    id TEXT PRIMARY KEY,
+                    namespace TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_namespace_created ON memories(namespace, created_at DESC)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS agent_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    user_request TEXT,
+                    status TEXT,
+                    created_at TEXT,
+                    completed_at TEXT,
+                    summary TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS agent_steps (
+                    id INTEGER PRIMARY KEY,
+                    task_id TEXT,
+                    action_id TEXT,
+                    tool_name TEXT,
+                    action_type TEXT,
+                    decision TEXT,
+                    observation_summary TEXT,
+                    verification_status TEXT,
+                    rollback_status TEXT,
+                    created_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_save_candidates (
+                    id INTEGER PRIMARY KEY,
+                    task_id TEXT,
+                    candidate_fact TEXT,
+                    reason TEXT,
+                    status TEXT,
+                    created_at TEXT
+                )
+                """
+            )
 
     def add_message(self, session_id: str, role: str, content: str) -> None:
         with self._lock, self._connect() as conn:
@@ -73,3 +129,94 @@ class MemoryStore:
             {"role": role, "content": content, "created_at": created_at}
             for role, content, created_at in reversed(rows)
         ]
+
+    def remember_fact(self, key: str, value: str, *, namespace: str = "user_profile", source: str = "user") -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        safe_key = " ".join(key.strip().split())[:120] or "note"
+        safe_value = " ".join(value.strip().split())[:1000]
+        if not safe_value:
+            return
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memories (id, namespace, key, value, source, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (uuid4().hex, namespace, safe_key, safe_value, source, now, now),
+            )
+
+    def recent_memories(self, *, namespace: str = "user_profile", limit: int = 8) -> list[dict[str, str]]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT key, value, source, created_at
+                FROM memories
+                WHERE namespace = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (namespace, limit),
+            ).fetchall()
+        return [
+            {"key": key, "value": value, "source": source, "created_at": created_at}
+            for key, value, source, created_at in rows
+        ]
+
+    def search_memories(self, query: str, *, namespace: str = "user_profile", limit: int = 8) -> list[dict[str, str]]:
+        term = f"%{query.strip()}%"
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT key, value, source, created_at
+                FROM memories
+                WHERE namespace = ? AND (key LIKE ? OR value LIKE ?)
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (namespace, term, term, limit),
+            ).fetchall()
+        return [
+            {"key": key, "value": value, "source": source, "created_at": created_at}
+            for key, value, source, created_at in rows
+        ]
+
+    def log_agent_task(self, task_id: str, user_request: str, status: str = "started", summary: str = "") -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO agent_tasks (task_id, user_request, status, created_at, completed_at, summary)
+                VALUES (?, ?, ?, COALESCE((SELECT created_at FROM agent_tasks WHERE task_id = ?), ?), ?, ?)
+                """,
+                (task_id, user_request, status, task_id, now, now if status in {"completed", "stopped", "failed"} else None, summary),
+            )
+
+    def log_agent_step(
+        self,
+        task_id: str,
+        action_id: str,
+        tool_name: str,
+        action_type: str,
+        decision: str,
+        observation_summary: str = "",
+        verification_status: str = "",
+        rollback_status: str = "",
+    ) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO agent_steps (task_id, action_id, tool_name, action_type, decision, observation_summary, verification_status, rollback_status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (task_id, action_id, tool_name, action_type, decision, observation_summary, verification_status, rollback_status, datetime.now(timezone.utc).isoformat()),
+            )
+
+    def add_memory_save_candidate(self, task_id: str, candidate_fact: str, reason: str, status: str = "pending") -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_save_candidates (task_id, candidate_fact, reason, status, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (task_id, candidate_fact, reason, status, datetime.now(timezone.utc).isoformat()),
+            )

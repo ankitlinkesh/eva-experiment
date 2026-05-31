@@ -38,7 +38,7 @@ class OpenAICompatibleProvider:
         }
         payload = {"model": self.model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(35.0, connect=5.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=4.0)) as client:
                 response = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
         except httpx.HTTPError as exc:
             return LLMResponse(provider=self.name, model=self.model, ok=False, error=str(exc))

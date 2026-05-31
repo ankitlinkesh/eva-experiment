@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.eva.agent.planner import ToolCallPlanner
-from backend.eva.core.config import load_local_env, load_settings
+from backend.eva.core.config import load_project_env, load_settings
 from backend.eva.llm.router import attempts_as_dicts, complete_with_fallback, get_llm_status
 from backend.eva.tools.registry import ToolRegistry
 
@@ -80,7 +80,7 @@ async def router_case(settings, label: str, messages: list[dict[str, str]], purp
 
 
 async def main() -> None:
-    load_local_env(ROOT / ".env")
+    load_project_env(ROOT)
     settings = load_settings(ROOT / "config" / "eva.toml")
     registry = ToolRegistry()
     planner = ToolCallPlanner(settings.models, registry)

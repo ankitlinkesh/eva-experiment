@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api.routes import router
 from .api.websocket import websocket_router
-from .core.config import load_local_env, load_settings
+from .core.config import load_project_env, load_settings
 from .memory.store import MemoryStore
 
 
@@ -14,7 +14,7 @@ FRONTEND_DIR = ROOT / "frontend"
 
 
 def create_app() -> FastAPI:
-    load_local_env(ROOT / ".env")
+    load_project_env(ROOT)
     settings = load_settings(ROOT / "config" / "eva.toml")
     app = FastAPI(title="Eva Agent", version="0.1.0")
     app.state.settings = settings

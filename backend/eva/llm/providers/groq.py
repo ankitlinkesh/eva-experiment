@@ -1,8 +1,5 @@
 ﻿from __future__ import annotations
 
-import os
-
-from ...core.config import ModelSettings
 from ._openai_compatible import OpenAICompatibleProvider
 
 
