@@ -13,6 +13,10 @@ __pycache__/
 *.secrets
 *.secret
 
+data/
+bin/
+models/
+frontend/assets/
 data/*.sqlite3
 data/*.log
 backend/eva/data/

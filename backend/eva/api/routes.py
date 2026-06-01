@@ -30,6 +30,8 @@ from ..llm.router import complete_with_fallback
 from ..models.gemini import GeminiClient
 from ..models.ollama import OllamaClient
 from ..models.router import ModelRoute
+from ..permissions.ledger import create_pending_action
+from ..permissions.pending_actions import EvaPendingAction
 from ..screen.capture import capture_primary_screen_jpeg
 from ..security.action_types import ActionType
 from ..security.permission_gate import PermissionContext, evaluate_action
@@ -721,9 +723,29 @@ def _handle_capability_route(
         )
         decision = evaluate_action(action, PermissionContext())
         if decision.decision == "ask_override":
+            pending = EvaPendingAction.new(
+                action_type="file.delete",
+                risk_level="high",
+                risk_category="destructive_file_action",
+                summary=f"Delete {classification.get('target') or 'Downloads'}",
+                target=str(classification.get("target") or "Downloads"),
+                payload_summary="Destructive file action summary only",
+                requires_override=True,
+                source="normal_chat",
+                safety_reason=decision.reason,
+                executor_available=False,
+            )
+            create_pending_action(pending)
             return (
                 "That is a destructive file action, so I did not delete anything. "
-                "Eva would need a rollback/checkpoint plan first, then you would have to say `confirm override` before any delete could run.",
+                "Eva would need a rollback/checkpoint plan first, then you would have to approve the exact pending action before any delete could run.\n\n"
+                "Pending action:\n"
+                f"ID: {pending.id}\n"
+                f"Status: {pending.status}\n"
+                f"Risk: {pending.risk_category}\n"
+                f"Summary: {pending.summary}\n\n"
+                f"Say `confirm override {pending.id}` only if you understand this is destructive. "
+                "This build still cannot delete files through the verified executor phase, so confirmation will not delete anything yet.",
                 "capability:permission_gate",
             )
         return decision.reason, "capability:permission_gate"
@@ -731,12 +753,52 @@ def _handle_capability_route(
     if capability == "message_workflow":
         recipient = str(classification.get("recipient") or "").strip()
         body = str(classification.get("message") or "").strip()
+        if route == "message_send_followup":
+            return (
+                "I need a specific pending action ID. Use `pending actions` to see active actions, then say `confirm <id>`. "
+                "I did not send anything.",
+                "capability:message_workflow",
+            )
         result = _run_capability_tool("message.prepare", recipient=recipient, message=body)
         if isinstance(result, dict) and result.get("ok"):
+            pending = EvaPendingAction.new(
+                action_type="message.send.whatsapp",
+                risk_level="medium",
+                risk_category="external_message",
+                summary=f"Send WhatsApp message to {recipient}: \"{body}\"",
+                target=recipient,
+                payload_summary=f"Message: {body}",
+                requires_confirmation=True,
+                source="normal_chat",
+                safety_reason="External messages require explicit confirmation.",
+                redacted_payload={"recipient": recipient, "message": body},
+                executor_available=False,
+            )
+            create_pending_action(pending)
+            if classification.get("requested_web"):
+                return (
+                    f"I prepared a WhatsApp Web draft request for {recipient}: \"{body}\". I did not send anything.\n\n"
+                    "Pending action:\n"
+                    f"ID: {pending.id}\n"
+                    f"Status: {pending.status}\n"
+                    f"Risk: {pending.risk_category}\n"
+                    f"Summary: {pending.summary}\n\n"
+                    "Sending requires confirmation. "
+                    f"Say `confirm {pending.id}` to approve this exact action. "
+                    "This build still cannot automatically send WhatsApp until a later verified executor phase.",
+                    "capability:message_workflow",
+                )
             return (
-                f"I prepared a WhatsApp draft for {recipient}: \"{body}\". Sending requires confirmation, and I will not send it silently. "
-                "WhatsApp Desktop is the first target; if it is unavailable, I need your confirmation before using WhatsApp Web. "
-                "Full recipient-search and delivery verification is still limited.",
+                f"I prepared a WhatsApp draft for {recipient}: \"{body}\". I did not send anything. "
+                "WhatsApp Desktop is the first target, and Eva will not send it silently.\n\n"
+                "Pending action:\n"
+                f"ID: {pending.id}\n"
+                f"Status: {pending.status}\n"
+                f"Risk: {pending.risk_category}\n"
+                f"Summary: {pending.summary}\n\n"
+                "Sending requires confirmation. "
+                f"Say `confirm {pending.id}` to approve this exact action. "
+                "This build still cannot automatically send WhatsApp until a later verified executor phase.",
                 "capability:message_workflow",
             )
         return "I recognized the WhatsApp workflow, but draft preparation is unavailable right now. I did not send anything.", "capability:message_workflow"

@@ -31,23 +31,45 @@ def is_llm_guard_available() -> bool:
 
 
 def _guard_text(text: str, *, output: bool = False) -> GuardrailResult:
+    original = str(text or "")
+    lowered = original.lower()
+    env_local_name = ".env" + ".local"
     redacted, events = redact_secrets(text)
     warnings: list[str] = []
     if events:
         warnings.append("secret_like_content_redacted")
     injection = detect_prompt_injection(redacted)
     unsafe_output = detect_unsafe_output(redacted) if output else None
-    blocked = bool(injection.get("blocked") or (unsafe_output or {}).get("blocked"))
+    secret_request = any(
+        marker in lowered
+        for marker in (
+            env_local_name,
+            "show api key",
+            "show me my api key",
+            "reveal api key",
+            "reveal token",
+            "show token",
+            "read secret",
+            "show password",
+        )
+    )
+    blocked = bool(secret_request or injection.get("blocked") or (unsafe_output or {}).get("blocked"))
     if injection.get("warnings"):
         warnings.extend(injection["warnings"])
     if unsafe_output and unsafe_output.get("warnings"):
         warnings.extend(unsafe_output["warnings"])
+    if secret_request:
+        warnings.append("secret_access_request")
     return GuardrailResult(
         safe=not blocked and not events,
         blocked=blocked,
         warnings=warnings,
         redactions=events,
-        reason=str(injection.get("reason") or (unsafe_output or {}).get("reason") or ""),
+        reason=str(
+            "Secret, token, password, or .env file access is blocked."
+            if secret_request
+            else injection.get("reason") or (unsafe_output or {}).get("reason") or ""
+        ),
         sanitized=redacted,
     )
 

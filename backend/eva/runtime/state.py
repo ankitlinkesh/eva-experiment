@@ -26,6 +26,18 @@ class EvaRuntimeState:
     observations: list[dict[str, Any]] = field(default_factory=list)
     verification_results: list[dict[str, Any]] = field(default_factory=list)
     rollback_results: list[dict[str, Any]] = field(default_factory=list)
+    dry_run: bool = False
+    execution_mode: str = "normal"
+    execution_allowed: bool = False
+    execution_refused_reason: str | None = None
+    execution_bridge_version: str | None = "v2_safe_execution_bridge_v1"
+    executed_by: str | None = None
+    execution_summary: str | None = None
+    skipped_execution_reason: str | None = None
+    pending_action: dict[str, Any] | None = None
+    plan_summary: str | None = None
+    route_score: float | None = None
+    route_reason: str | None = None
     provenance: str = "v2_runtime"
     final_response: str = ""
     trace_id: str | None = None

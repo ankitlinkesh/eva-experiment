@@ -25,17 +25,20 @@ class EvaAgent:
         return score
 
     def plan(self, state: Any) -> EvaAgentResult:
+        action = {
+            "agent": self.name,
+            "action_type": f"{self.name}.delegate_existing_system",
+            "summary": f"Would delegate to {self.delegated_core}.",
+            "requires_permission": False,
+            "side_effect_level": "proposed_only",
+            "delegate_to": self.delegated_core,
+            "safety": "existing permission gate remains authoritative",
+        }
         return EvaAgentResult(
             agent_name=self.name,
             ok=True,
-            message=f"{self.name.title()}Agent selected. Phase 1 will delegate to {self.delegated_core} instead of replacing existing behavior.",
-            proposed_actions=[
-                {
-                    "agent": self.name,
-                    "delegate_to": self.delegated_core,
-                    "safety": "existing permission gate remains authoritative",
-                }
-            ],
+            message=f"{self.name.title()}Agent selected. Phase 2 preview would delegate to {self.delegated_core}.",
+            proposed_actions=[action],
             delegated_to=self.delegated_core,
         )
 

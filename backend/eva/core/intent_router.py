@@ -83,9 +83,33 @@ def _chatgpt_in_chrome_prompt(value: str) -> str:
 def _whatsapp_message_parts(value: str) -> tuple[str, str] | None:
     text = re.sub(r"\s+", " ", str(value or "").strip())
     patterns = (
+        r"^send\s+whatsapp\s+to\s+(.+?)\s+saying\s+(.+)$",
+        r"^send\s+(?:a\s+)?whatsapp\s+message\s+to\s+(.+?)\s+saying\s+(.+)$",
         r"^send\s+(?:a\s+)?whatsapp\s+message\s+saying\s+(.+?)\s+to\s+(.+)$",
         r"^send\s+(.+?)\s+to\s+(.+?)\s+on\s+whatsapp$",
         r"^whatsapp\s+(.+?)\s+(.+)$",
+    )
+    recipient_first = patterns[:2]
+    for pattern in recipient_first:
+        match = re.match(pattern, text, flags=re.IGNORECASE)
+        if match:
+            recipient, message = match.group(1).strip(" .?!'\""), match.group(2).strip(" .?!'\"")
+            if message and recipient:
+                return recipient, message
+    for pattern in patterns[2:]:
+        match = re.match(pattern, text, flags=re.IGNORECASE)
+        if match:
+            message, recipient = match.group(1).strip(" .?!'\""), match.group(2).strip(" .?!'\"")
+            if message and recipient:
+                return recipient, message
+    return None
+
+
+def _whatsapp_web_message_parts(value: str) -> tuple[str, str] | None:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    patterns = (
+        r"^open\s+whatsapp(?:\s+web)?(?:\s+(?:on|in)\s+chrome)?\s+and\s+send\s+(.+?)\s+to\s+(.+)$",
+        r"^open\s+whatsapp(?:\s+web)?\s+on\s+chrome\s+and\s+send\s+(.+?)\s+to\s+(.+)$",
     )
     for pattern in patterns:
         match = re.match(pattern, text, flags=re.IGNORECASE)
@@ -94,6 +118,18 @@ def _whatsapp_message_parts(value: str) -> tuple[str, str] | None:
             if message and recipient:
                 return recipient, message
     return None
+
+
+def _message_send_followup(text: str) -> bool:
+    return text in {
+        "open and send the message",
+        "open and send it",
+        "send it",
+        "send now",
+        "yes send",
+        "confirm send",
+        "confirm",
+    }
 
 
 def _youtube_play_query(value: str) -> str:
@@ -229,6 +265,34 @@ def classify_capability_intent(message: str, context: dict | None = None) -> dic
             action="delete",
         )
 
+    whatsapp_web_parts = _whatsapp_web_message_parts(message)
+    if whatsapp_web_parts:
+        recipient, body = whatsapp_web_parts
+        update_task_context(
+            context,
+            user_request=message,
+            active_intent="prepare_message",
+            target_app="chrome",
+            target_platform="whatsapp",
+            target_url="https://web.whatsapp.com",
+            target_domain="web.whatsapp.com",
+            target_contact=recipient,
+            target_message=body,
+            expected_result="WhatsApp Web draft prepared; send requires confirmation",
+            provenance="message_workflow",
+        )
+        return _base_result(
+            True,
+            capability="message_workflow",
+            confidence=0.92,
+            reason="WhatsApp Web message workflow requested.",
+            suggested_route="whatsapp_message_prepare",
+            recipient=recipient,
+            message=body,
+            requested_web=True,
+            requires_confirmation=True,
+        )
+
     whatsapp_parts = _whatsapp_message_parts(message)
     if whatsapp_parts:
         recipient, body = whatsapp_parts
@@ -241,6 +305,21 @@ def classify_capability_intent(message: str, context: dict | None = None) -> dic
             suggested_route="whatsapp_message_prepare",
             recipient=recipient,
             message=body,
+            requires_confirmation=True,
+        )
+
+    if _message_send_followup(text):
+        current = get_current_task_context(context)
+        return _base_result(
+            True,
+            capability="message_workflow",
+            confidence=0.9,
+            reason="External message send follow-up requires confirmation and verified draft state.",
+            suggested_route="message_send_followup",
+            recipient=getattr(current, "target_contact", None) if current else None,
+            message=getattr(current, "target_message", None) if current else None,
+            channel=getattr(current, "target_platform", None) if current else None,
+            requires_confirmation=True,
         )
 
     if text in {"copy current url", "copy current link", "copy this url", "copy this page url"}:

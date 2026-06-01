@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .feature_flags import get_v2_feature_flags
-from .nodes import run_fallback_nodes
+from .nodes import run_execute_nodes, run_fallback_nodes, run_preview_nodes
 
 
 def is_langgraph_available() -> bool:
@@ -32,3 +32,23 @@ def run_eva_v2_request(user_request: str, context: dict[str, Any] | None = None)
         "delegated": not flags.runtime_enabled,
         "state": state.as_dict(),
     }
+
+
+def run_eva_v2_route_preview(user_request: str, context: dict[str, Any] | None = None) -> Any:
+    return run_preview_nodes(user_request, mode="route", context=context)
+
+
+def run_eva_v2_plan_preview(user_request: str, context: dict[str, Any] | None = None) -> Any:
+    return run_preview_nodes(user_request, mode="plan", context=context)
+
+
+def run_eva_v2_dry_run(user_request: str, context: dict[str, Any] | None = None) -> Any:
+    return run_preview_nodes(user_request, mode="dry_run", context=context)
+
+
+def run_eva_v2_execute(user_request: str, context: dict[str, Any] | None = None) -> Any:
+    return run_execute_nodes(user_request, context=context)
+
+
+def run_eva_v2_safe_execute(user_request: str, context: dict[str, Any] | None = None) -> Any:
+    return run_eva_v2_execute(user_request, context=context)

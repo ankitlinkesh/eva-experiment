@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +107,7 @@ def _is_raw_json(text: str) -> bool:
 
 def main() -> int:
     failures = 0
+    os.environ.setdefault("EVA_PENDING_ACTION_LEDGER_PATH", str(Path(tempfile.mkdtemp(prefix="eva_pending_")) / "pending_actions.jsonl"))
     registry = DryRegistry()
     session_context: dict[str, Any] = {}
 

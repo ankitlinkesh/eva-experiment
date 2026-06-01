@@ -290,6 +290,76 @@ def _format_automation_adapters_status() -> str:
     )
 
 
+def _handle_eva_v2_preview_command(normalized: str, original: str) -> tuple[str, str] | None:
+    commands = (
+        ("eva v2 dry run ", "dry_run"),
+        ("eva v2 plan ", "plan"),
+        ("eva v2 route ", "route"),
+    )
+    for prefix, mode in commands:
+        if not normalized.startswith(prefix):
+            continue
+        request = original[len(prefix) :].strip()
+        if not request:
+            return "Give me a request after the v2 preview command, like `eva v2 dry run open ChatGPT on Chrome`.", "fast-command"
+        if mode == "route":
+            from ..runtime.graph import run_eva_v2_route_preview
+
+            state = run_eva_v2_route_preview(request)
+        elif mode == "plan":
+            from ..runtime.graph import run_eva_v2_plan_preview
+
+            state = run_eva_v2_plan_preview(request)
+        else:
+            from ..runtime.graph import run_eva_v2_dry_run
+
+            state = run_eva_v2_dry_run(request)
+        return state.final_response, "fast-command"
+    return None
+
+
+def _handle_eva_v2_execute_command(normalized: str, original: str) -> tuple[str, str] | None:
+    for prefix in ("eva v2 execute ", "eva v2 run "):
+        if not normalized.startswith(prefix):
+            continue
+        request = original[len(prefix) :].strip()
+        if not request:
+            return "Give me a request after the v2 execution command, like `eva v2 execute resources status`.", "fast-command"
+        from ..runtime.graph import run_eva_v2_execute
+
+        state = run_eva_v2_execute(request)
+        return state.final_response, "fast-command"
+    return None
+
+
+def _handle_resource_registry_command(normalized: str, original: str) -> tuple[str, str] | None:
+    if normalized in {"resources status", "resource registry status"}:
+        from ..resources.status import format_resource_registry_status
+
+        return format_resource_registry_status(), "fast-command"
+
+    if normalized in {"mcp status", "mcp policy status"}:
+        from ..resources.status import format_mcp_policy_status
+
+        return format_mcp_policy_status(), "fast-command"
+
+    if normalized in {"open source tools status", "open-source tools status", "open source status"}:
+        from ..resources.status import format_open_source_tools_status
+
+        return format_open_source_tools_status(), "fast-command"
+
+    for prefix in ("resource detail ", "tool resource detail "):
+        if normalized.startswith(prefix):
+            resource_id = original[len(prefix):].strip()
+            if not resource_id:
+                return "Give me a resource id, like `resource detail github-mcp-server`.", "fast-command"
+            from ..resources.status import format_resource_detail
+
+            return format_resource_detail(resource_id), "fast-command"
+
+    return None
+
+
 def _looks_like_identity_joke(original: str, payload: str) -> bool:
     text = f"{original} {payload}".lower()
     return bool(re.search(r"\b(my name is|i am|i'm|call me)\b", text)) and any(marker in text for marker in ("lmao", "lol", "jk", "joking", "just kidding"))
@@ -460,6 +530,86 @@ def _format_workspace_result(result: object, *, mode: str = "generic") -> str:
         return f"{result.get('summary')}"
 
     return json.dumps(result, indent=2)
+
+
+def _format_code_index_status(result: object) -> str:
+    if not isinstance(result, dict) or not result.get("ok"):
+        error = result.get("error") if isinstance(result, dict) else "unknown error"
+        return f"Code index v2 status unavailable safely: {error}."
+    if not result.get("indexed"):
+        return "Code index v2 status: no local metadata cache has been built yet. Run `code index refresh` to build it."
+    return (
+        "Code index v2 status: ready. "
+        f"Indexed files: {result.get('indexed_files', 0)}. "
+        f"Skipped: {result.get('skipped', 0)}. "
+        "Cache: local metadata only. Full file contents stored: no. Secrets indexed: no."
+    )
+
+
+def _format_code_index_refresh(result: object) -> str:
+    if not isinstance(result, dict) or not result.get("ok"):
+        error = result.get("error") if isinstance(result, dict) else "unknown error"
+        return f"Code index v2 refresh failed safely: {error}."
+    return (
+        "Code index v2 refreshed. "
+        f"Indexed {result.get('indexed_files', 0)} safe files and skipped {result.get('skipped', 0)} blocked/unsupported files. "
+        "The cache stores metadata only, not full file contents."
+    )
+
+
+def _format_code_index_search(result: object) -> str:
+    if not isinstance(result, dict) or not result.get("ok"):
+        error = result.get("error") if isinstance(result, dict) else "unknown error"
+        return f"Code index v2 search refused safely: {error}."
+    matches = result.get("matches") or []
+    if not matches:
+        return f"Code index v2 matches for `{result.get('query')}`: none found in the safe metadata index."
+    lines = [f"Code index v2 matches for `{result.get('query')}`:"]
+    for item in matches[:8]:
+        if isinstance(item, dict):
+            lines.append(f"- {item.get('path')}: {item.get('summary')}")
+    return "\n".join(lines)
+
+
+def _format_code_index_symbols(result: object) -> str:
+    if not isinstance(result, dict) or not result.get("ok"):
+        error = result.get("error") if isinstance(result, dict) else "unknown error"
+        return f"Code index v2 symbol search refused safely: {error}."
+    matches = result.get("matches") or []
+    if not matches:
+        return f"Code index v2 symbols for `{result.get('query')}`: none found."
+    lines = [f"Code index v2 symbols for `{result.get('query')}`:"]
+    for item in matches[:10]:
+        if isinstance(item, dict):
+            lines.append(f"- {item.get('name')} ({item.get('kind')}) in {item.get('path')}:{item.get('line')}")
+    return "\n".join(lines)
+
+
+def _format_code_index_workspace(result: object) -> str:
+    if not isinstance(result, dict) or not result.get("ok"):
+        error = result.get("error") if isinstance(result, dict) else "unknown error"
+        return f"Workspace summary unavailable safely: {error}."
+    lines = ["Workspace summary:"]
+    for area in result.get("major_areas") or []:
+        lines.append(f"- {area}")
+    lines.append(f"Indexed safe files: {result.get('indexed_files', 0)}.")
+    lines.append(str(result.get("safety") or "Code index stores metadata only."))
+    return "\n".join(lines)
+
+
+def _format_code_index_file_summary(result: object) -> str:
+    if not isinstance(result, dict) or not result.get("ok"):
+        error = result.get("error") if isinstance(result, dict) else "unknown error"
+        return f"Code file summary refused safely: {error}."
+    lines = [
+        f"Code file summary for `{result.get('path')}`:",
+        str(result.get("summary") or "Summary unavailable."),
+        "Summary-only local read; full file contents were not returned.",
+    ]
+    symbols = result.get("symbols") or []
+    if symbols:
+        lines.append("Symbols: " + ", ".join(str(symbol) for symbol in symbols[:20]))
+    return "\n".join(lines)
 
 
 def _format_code_result(result: object, *, mode: str = "generic") -> str:
@@ -775,6 +925,28 @@ def maybe_handle_fast_command(
     if not normalized:
         return None
 
+    execute = _handle_eva_v2_execute_command(normalized, original)
+    if execute:
+        return execute
+
+    preview = _handle_eva_v2_preview_command(normalized, original)
+    if preview:
+        return preview
+
+    resource_command = _handle_resource_registry_command(normalized, original)
+    if resource_command:
+        return resource_command
+
+    from ..permissions.confirmation import handle_confirmation_command, handle_pending_action_status_command
+
+    pending_status = handle_pending_action_status_command(original)
+    if pending_status:
+        return pending_status, "fast-command"
+
+    pending_confirmation = handle_confirmation_command(original)
+    if pending_confirmation:
+        return pending_confirmation, "fast-command"
+
     if normalized in {"where did you get that answer from", "where did you get that from", "what was your source", "source for that", "did you search that"}:
         return answer_provenance_status(session_context), "fast-command"
 
@@ -976,10 +1148,43 @@ def maybe_handle_fast_command(
         status = tavily_status()
         return json.dumps(status, indent=2), "fast-command"
 
+    if normalized == "code index status":
+        from ..code_index.status import code_index_status
+
+        return _format_code_index_status(code_index_status()), "fast-command"
+
+    if normalized in {"code index refresh", "refresh code index"}:
+        from ..code_index.status import refresh_code_index
+
+        return _format_code_index_refresh(refresh_code_index()), "fast-command"
+
+    code_index_query = _after_prefix(original, ("code search ", "search code for "))
+    if code_index_query:
+        from ..code_index.search import search_code
+
+        return _format_code_index_search(search_code(code_index_query, limit=8)), "fast-command"
+
+    symbol_index_query = _after_prefix(original, ("symbol search ", "code symbols "))
+    if symbol_index_query:
+        from ..code_index.search import search_symbols
+
+        return _format_code_index_symbols(search_symbols(symbol_index_query, limit=8)), "fast-command"
+
+    if normalized == "workspace summary":
+        from ..code_index.status import workspace_summary
+
+        return _format_code_index_workspace(workspace_summary()), "fast-command"
+
+    file_summary_path = _after_prefix(original, ("code file summary ", "summarize file ", "summarise file "))
+    if file_summary_path:
+        from ..code_index.search import summarize_file
+
+        return _format_code_index_file_summary(summarize_file(file_summary_path)), "fast-command"
+
     if normalized in {"code status", "code intelligence status"}:
         return _run_tool(tools, "code_status", session_context)
 
-    if normalized in {"reindex code", "index code", "refresh code index"}:
+    if normalized in {"reindex code", "index code"}:
         return _run_tool(tools, "code_reindex", session_context)
 
     if normalized in {"project map", "code project map", "map project", "code map"}:

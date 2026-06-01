@@ -37,6 +37,34 @@ def log_verification(trace_id: str, verification: dict[str, Any], root: Path | N
     _store(root).append(trace_id, "verification", verification)
 
 
+def log_dry_run_preview(trace_id: str, payload: dict[str, Any], root: Path | None = None) -> None:
+    _store(root).append(trace_id, "dry_run_preview", payload)
+
+
+def log_execution_bridge(trace_id: str, payload: dict[str, Any], root: Path | None = None) -> None:
+    _store(root).append(trace_id, "v2_execute", payload)
+
+
+def log_pending_action_event(trace_id: str, event_type: str, payload: dict[str, Any], root: Path | None = None) -> None:
+    allowed = {
+        "pending_action_created",
+        "pending_action_confirmed",
+        "pending_action_cancelled",
+        "pending_action_expired",
+        "pending_action_executor_unavailable",
+    }
+    safe_type = event_type if event_type in allowed else "pending_action_created"
+    summary = {
+        "action_id": payload.get("action_id") or payload.get("id"),
+        "risk_category": payload.get("risk_category"),
+        "status": payload.get("status"),
+        "summary": payload.get("summary"),
+        "source": payload.get("source"),
+        "selected_agent": payload.get("selected_agent"),
+    }
+    _store(root).append(trace_id, safe_type, summary)
+
+
 def end_trace(trace_id: str, final_summary: str, root: Path | None = None) -> None:
     _store(root).append(trace_id, "trace_ended", {"final_summary": final_summary})
 

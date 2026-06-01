@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+from .models import EvaResource
+
+
+def _resource(
+    *,
+    id: str,
+    name: str,
+    category: str,
+    provider: str,
+    kind: str,
+    license_hint: str | None = None,
+    homepage: str | None = None,
+    repo: str | None = None,
+    local_only: bool = False,
+    cloud_capable: bool = False,
+    requires_api_key: bool = False,
+    requires_network: bool = False,
+    can_read_files: bool = False,
+    can_write_files: bool = False,
+    can_execute_code: bool = False,
+    can_control_browser: bool = False,
+    can_control_desktop: bool = False,
+    can_send_external_messages: bool = False,
+    can_delete_or_modify_system: bool = False,
+    default_enabled: bool = False,
+    feature_flag: str | None = None,
+    risk_level: str = "low",
+    status: str = "experimental",
+    notes: str = "",
+) -> EvaResource:
+    return EvaResource(
+        id=id,
+        name=name,
+        category=category,
+        provider=provider,
+        kind=kind,
+        license_hint=license_hint,
+        homepage=homepage,
+        repo=repo,
+        local_only=local_only,
+        cloud_capable=cloud_capable,
+        requires_api_key=requires_api_key,
+        requires_network=requires_network,
+        can_read_files=can_read_files,
+        can_write_files=can_write_files,
+        can_execute_code=can_execute_code,
+        can_control_browser=can_control_browser,
+        can_control_desktop=can_control_desktop,
+        can_send_external_messages=can_send_external_messages,
+        can_delete_or_modify_system=can_delete_or_modify_system,
+        default_enabled=default_enabled,
+        feature_flag=feature_flag,
+        risk_level=risk_level,
+        status=status,
+        notes=notes,
+    )
+
+
+OPEN_SOURCE_RESOURCES = [
+    _resource(id="langgraph", name="LangGraph", category="runtime", provider="LangChain", kind="python_package", license_hint="MIT", repo="https://github.com/langchain-ai/langgraph", can_execute_code=True, risk_level="high", status="experimental", feature_flag="EVA_V2_LANGGRAPH_ENABLED", notes="Optional orchestration package; not required for fallback v2 previews."),
+    _resource(id="pydantic-ai", name="Pydantic AI", category="runtime", provider="Pydantic", kind="python_package", license_hint="MIT", repo="https://github.com/pydantic/pydantic-ai", cloud_capable=True, requires_network=True, can_execute_code=True, risk_level="high", status="experimental", notes="Reference candidate for typed agents; not installed or enabled here."),
+    _resource(id="pydantic", name="Pydantic", category="runtime", provider="Pydantic", kind="python_package", license_hint="MIT", repo="https://github.com/pydantic/pydantic", local_only=True, risk_level="low", status="allowed_with_permission", notes="Schema helper when available; dataclass fallback remains supported."),
+    _resource(id="llm-guard", name="LLM Guard", category="safety", provider="Protect AI", kind="python_package", license_hint="MIT", repo="https://github.com/protectai/llm-guard", local_only=True, cloud_capable=False, can_read_files=False, risk_level="medium", status="experimental", feature_flag="EVA_V2_LLM_GUARD_ENABLED", notes="Optional guardrail package; fallback guardrails remain active."),
+    _resource(id="promptfoo", name="Promptfoo", category="eval", provider="Promptfoo", kind="eval_tool", license_hint="MIT", repo="https://github.com/promptfoo/promptfoo", requires_network=False, can_read_files=True, risk_level="medium", status="reference_only", notes="Eval config reference only in this phase; no eval runner is executed."),
+    _resource(id="langfuse", name="Langfuse", category="observability", provider="Langfuse", kind="observability", license_hint="MIT", repo="https://github.com/langfuse/langfuse", cloud_capable=True, requires_api_key=True, requires_network=True, risk_level="medium", status="experimental", feature_flag="EVA_V2_LANGFUSE_ENABLED", notes="Remote tracing disabled by default; local redacted trace store remains primary."),
+    _resource(id="chromadb", name="ChromaDB", category="memory", provider="Chroma", kind="vector_store", license_hint="Apache-2.0", repo="https://github.com/chroma-core/chroma", local_only=True, can_read_files=True, can_write_files=True, risk_level="medium", status="experimental", feature_flag="EVA_V2_VECTOR_MEMORY_ENABLED", notes="Optional local vector store; SQLite fallback remains active."),
+    _resource(id="qdrant", name="Qdrant", category="memory", provider="Qdrant", kind="vector_store", license_hint="Apache-2.0", repo="https://github.com/qdrant/qdrant", local_only=True, requires_network=False, can_read_files=True, can_write_files=True, risk_level="medium", status="experimental", feature_flag="EVA_V2_VECTOR_MEMORY_ENABLED", notes="Optional vector store interface; disabled by default."),
+    _resource(id="playwright-python", name="Playwright Python", category="browser", provider="Microsoft", kind="python_package", license_hint="Apache-2.0", repo="https://github.com/microsoft/playwright-python", requires_network=True, can_control_browser=True, can_read_files=False, risk_level="medium", status="experimental", feature_flag="EVA_V2_PLAYWRIGHT_ENABLED", notes="Browser automation adapter is cataloged only; no browser execution is enabled."),
+    _resource(id="pyautogui", name="PyAutoGUI", category="desktop", provider="PyAutoGUI", kind="python_package", license_hint="BSD", repo="https://github.com/asweigart/pyautogui", local_only=True, can_control_desktop=True, can_write_files=True, risk_level="high", status="experimental", feature_flag="EVA_V2_PYAUTOGUI_ENABLED", notes="Desktop automation is disabled by default and requires high-confidence UI targets."),
+    _resource(id="ollama", name="Ollama", category="llm", provider="Ollama", kind="local_adapter", license_hint="MIT", homepage="https://ollama.com", local_only=True, default_enabled=True, risk_level="low", status="allowed", notes="Existing local LLM fallback already integrated."),
+    _resource(id="nvidia-nim-provider-existing", name="NVIDIA NIM provider", category="llm", provider="NVIDIA", kind="local_adapter", requires_api_key=True, requires_network=True, cloud_capable=True, default_enabled=True, risk_level="medium", status="allowed_with_permission", notes="Existing provider integration; keys stay outside the registry."),
+    _resource(id="tavily-existing", name="Tavily search", category="research", provider="Tavily", kind="local_adapter", requires_api_key=True, requires_network=True, cloud_capable=True, default_enabled=True, risk_level="medium", status="allowed_with_permission", notes="Existing web search integration; no key is stored in catalog."),
+    _resource(id="eva-chrome-execution-skills", name="Eva Chrome Execution Skills", category="browser", provider="Eva", kind="local_adapter", can_control_browser=True, requires_network=True, default_enabled=True, risk_level="medium", status="allowed_with_permission", notes="Existing bounded Chrome/web-app skill layer."),
+    _resource(id="eva-browser-agent-core", name="Eva Browser Agent Core", category="browser", provider="Eva", kind="local_adapter", can_control_browser=True, requires_network=True, default_enabled=True, risk_level="medium", status="allowed_with_permission", notes="Existing safe browser status/open/search/summarize core."),
+    _resource(id="eva-desktop-agent-core", name="Eva Desktop Agent Core", category="desktop", provider="Eva", kind="local_adapter", local_only=True, can_control_desktop=True, default_enabled=True, risk_level="medium", status="allowed_with_permission", notes="Existing desktop observation/window/action helpers."),
+    _resource(id="eva-visual-desktop-control", name="Eva Visual Desktop Control", category="desktop", provider="Eva", kind="local_adapter", local_only=True, can_control_desktop=True, default_enabled=True, risk_level="high", status="allowed_with_permission", notes="Existing visual control requires visible task context and safe UI targets."),
+    _resource(id="eva-spotify-desktop-skill", name="Eva Spotify Desktop Skill", category="media", provider="Eva", kind="local_adapter", local_only=True, can_control_desktop=True, default_enabled=True, risk_level="medium", status="allowed_with_permission", notes="Existing desktop-only Spotify skill; no API/OAuth/web player."),
+    _resource(id="eva-workspace-skills", name="Eva Workspace Skills", category="workspace", provider="Eva", kind="local_adapter", local_only=True, can_read_files=True, default_enabled=True, risk_level="medium", status="allowed_with_permission", notes="Existing safe workspace read/search helpers with secret exclusions."),
+    _resource(id="eva-code-intelligence", name="Eva Code Intelligence", category="code", provider="Eva", kind="local_adapter", local_only=True, can_read_files=True, default_enabled=True, risk_level="medium", status="allowed_with_permission", notes="Existing safe code index/search/explanation layer."),
+    _resource(id="eva-code-index", name="Eva Code Index v2", category="code", provider="Eva", kind="local_adapter", local_only=True, can_read_files=True, default_enabled=True, risk_level="medium", status="allowed_with_permission", notes="Local metadata-only code index. Skips secrets/runtime data and never stores full file contents."),
+    _resource(id="eva-research-sqlite", name="Eva Research SQLite", category="research", provider="Eva", kind="local_adapter", local_only=True, can_read_files=True, can_write_files=True, default_enabled=True, risk_level="low", status="allowed", notes="Existing local research store."),
+    _resource(id="eva-memory-sqlite", name="Eva Memory SQLite", category="memory", provider="Eva", kind="local_adapter", local_only=True, can_read_files=True, can_write_files=True, default_enabled=True, risk_level="low", status="allowed", notes="Existing local memory store."),
+]
+
+
+def get_open_source_resources() -> list[EvaResource]:
+    return list(OPEN_SOURCE_RESOURCES)
