@@ -199,6 +199,38 @@ def _format_research_status(result: object, *, raw: bool = False) -> str:
     )
 
 
+def _save_research_memory_note(topic: str, note: str, tags: object | None = None) -> str:
+    from ..research_memory.models import ResearchMemoryItem
+    from ..research_memory.quality import normalize_tags
+    from ..research_memory.sources import extract_tags, looks_private_or_sensitive, redact_research_text
+    from ..research_memory.store import add_research_item
+
+    clean_topic = str(topic or "").strip()
+    clean_note = str(note or "").strip()
+    if not clean_topic or not clean_note:
+        return "Give me a research topic and note, like `save research note LangGraph: graph workflows`."
+    redacted_note, was_redacted = redact_research_text(clean_note)
+    item = add_research_item(
+        ResearchMemoryItem(
+            id="",
+            topic=clean_topic,
+            title=clean_topic,
+            summary=redacted_note[:1500],
+            content_preview=redacted_note,
+            source_type="user_note",
+            source_url=None,
+            source_domain=None,
+            tags=normalize_tags(tags) or extract_tags(f"{clean_topic} {clean_note}"),
+            confidence="medium",
+            private=looks_private_or_sensitive(clean_note),
+            redacted=was_redacted,
+            provenance="fast_command:research_memory_save",
+        )
+    )
+    suffix = " Sensitive-looking text was redacted before storage." if item.redacted else ""
+    return f"Saved research note locally under {item.topic}. Item: {item.id}.{suffix}"
+
+
 def _format_eva_v2_status() -> str:
     from ..runtime.feature_flags import eva_v2_runtime_status
     from ..runtime.graph import is_langgraph_available
@@ -1001,6 +1033,219 @@ def maybe_handle_fast_command(
         except Exception as exc:
             return _json_debug({"ok": False, "error": str(exc)}), "research-tool"
 
+    if normalized in {"research memory status", "research memory v2 status"}:
+        from ..research_memory.status import format_research_memory_status
+
+        return format_research_memory_status(), "fast-command"
+
+    if normalized == "research memory stats":
+        from ..research_memory.io import format_research_memory_stats
+
+        return format_research_memory_stats(), "fast-command"
+
+    if normalized == "research memory vector status":
+        from ..research_memory.vector_index import format_vector_status
+
+        return format_vector_status(), "fast-command"
+
+    if normalized == "research memory vector index preview":
+        from ..research_memory.vector_index import format_vector_index_preview
+
+        return format_vector_index_preview(), "fast-command"
+
+    if normalized == "research memory retrieval status":
+        from ..research_memory.retrieval import retrieval_status
+
+        return retrieval_status(), "fast-command"
+
+    retrieval_plan = _after_prefix(original, ("research memory retrieval plan ",))
+    if retrieval_plan:
+        from ..research_memory.retrieval import explain_retrieval_plan
+
+        return explain_retrieval_plan(retrieval_plan), "fast-command"
+
+    retrieval_match = re.match(
+        r"^\s*research memory retrieve\s+(.+?)(?:\s+(topic|tag|source)\s+(.+))?\s*$",
+        original,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if retrieval_match:
+        from ..research_memory.retrieval import format_retrieval_results, retrieve_research
+
+        query = retrieval_match.group(1).strip()
+        filter_kind = (retrieval_match.group(2) or "").strip().lower()
+        filter_value = (retrieval_match.group(3) or "").strip()
+        kwargs: dict[str, str] = {}
+        if filter_kind == "topic":
+            kwargs["topic"] = filter_value
+        elif filter_kind == "tag":
+            kwargs["tag"] = filter_value
+        elif filter_kind == "source":
+            kwargs["source_type"] = filter_value
+        return format_retrieval_results(retrieve_research(query, **kwargs)), "fast-command"
+
+    vector_search_match = re.match(
+        r"^\s*research memory (?:vector|semantic) search\s+(.+?)(?:\s+(topic|tag)\s+(.+))?\s*$",
+        original,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if vector_search_match:
+        from ..research_memory.vector_index import format_vector_search
+
+        query = vector_search_match.group(1).strip()
+        filter_kind = (vector_search_match.group(2) or "").strip().lower()
+        filter_value = (vector_search_match.group(3) or "").strip()
+        kwargs: dict[str, str] = {}
+        if filter_kind == "topic":
+            kwargs["topic"] = filter_value
+        elif filter_kind == "tag":
+            kwargs["tag"] = filter_value
+        return format_vector_search(query, **kwargs), "fast-command"
+
+    if normalized == "research memory tags":
+        from ..research_memory.quality import format_research_tags
+
+        return format_research_tags(), "fast-command"
+
+    if normalized in {"research memory duplicates", "research memory merge duplicates preview"}:
+        from ..research_memory.quality import format_duplicates_preview
+
+        return format_duplicates_preview(), "fast-command"
+
+    if normalized == "research memory quality":
+        from ..research_memory.quality import format_quality_report
+
+        return format_quality_report(), "fast-command"
+
+    if normalized == "research memory export":
+        from ..research_memory.io import export_research_memory, format_export_result
+
+        return format_export_result(export_research_memory()), "fast-command"
+
+    export_topic = _after_prefix(original, ("research memory export topic ",))
+    if export_topic:
+        from ..research_memory.io import export_research_memory, format_export_result
+
+        return format_export_result(export_research_memory(topic=export_topic)), "fast-command"
+
+    import_note_match = re.match(
+        r"^\s*research memory import note\s+topic\s+(.+?)\s+title\s+(.+?)\s+tags\s+(.+?)\s+text\s+(.+)$",
+        original,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if import_note_match:
+        from ..research_memory.io import format_import_result, import_research_note
+
+        return (
+            format_import_result(
+                import_research_note(
+                    import_note_match.group(1).strip(),
+                    import_note_match.group(2).strip(),
+                    import_note_match.group(4).strip(),
+                    tags=import_note_match.group(3).strip(),
+                )
+            ),
+            "fast-command",
+        )
+
+    import_note_match = re.match(
+        r"^\s*research memory import note\s+topic\s+(.+?)\s+title\s+(.+?)\s+text\s+(.+)$",
+        original,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if import_note_match:
+        from ..research_memory.io import format_import_result, import_research_note
+
+        return (
+            format_import_result(
+                import_research_note(
+                    import_note_match.group(1).strip(),
+                    import_note_match.group(2).strip(),
+                    import_note_match.group(3).strip(),
+                )
+            ),
+            "fast-command",
+        )
+
+    delete_item_id = _after_prefix(original, ("research memory delete item ",))
+    if delete_item_id:
+        from ..research_memory.io import delete_research_memory_item
+
+        _ok, message = delete_research_memory_item(delete_item_id)
+        return message, "fast-command"
+
+    if normalized.startswith("research memory clear all"):
+        return "Research memory clear all is not supported in this phase. No research memory was cleared.", "fast-command"
+
+    clear_topic_match = re.match(r"^\s*research memory clear topic\s+(.+?)(?:\s+(confirm))?\s*$", original, flags=re.IGNORECASE | re.DOTALL)
+    if clear_topic_match:
+        from ..research_memory.io import clear_research_memory_topic
+
+        return clear_research_memory_topic(clear_topic_match.group(1).strip(), confirmed=bool(clear_topic_match.group(2))), "fast-command"
+
+    if normalized in {"recent research", "recent research memory"}:
+        from ..research_memory.status import format_recent_research
+
+        return format_recent_research(limit=10), "fast-command"
+
+    if normalized in {"research topics", "research memory topics"}:
+        from ..research_memory.status import format_research_topics
+
+        return format_research_topics(limit=50), "fast-command"
+
+    filtered_search_match = re.match(
+        r"^\s*(?:research memory search|search research memory)\s+(.+?)\s+(topic|tag|source)\s+(.+)$",
+        original,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if filtered_search_match:
+        from ..research_memory.status import format_research_search
+
+        query = filtered_search_match.group(1).strip()
+        filter_type = filtered_search_match.group(2).strip().lower()
+        filter_value = filtered_search_match.group(3).strip()
+        kwargs = {
+            "topic": filter_value if filter_type == "topic" else None,
+            "tag": filter_value if filter_type == "tag" else None,
+            "source_type": filter_value if filter_type == "source" else None,
+        }
+        return format_research_search(query, **kwargs), "fast-command"
+
+    research_memory_query = _after_prefix(original, ("research memory search ", "search research memory "))
+    if research_memory_query:
+        from ..research_memory.status import format_research_search
+
+        return format_research_search(research_memory_query), "fast-command"
+
+    research_topic = _after_prefix(original, ("research topic ", "summarize research topic ", "summarise research topic "))
+    if research_topic:
+        from ..research_memory.status import format_research_topic_summary
+
+        return format_research_topic_summary(research_topic), "fast-command"
+
+    save_research_memory_match = re.match(
+        r"^\s*(?:save research note|remember research)\s+([^:]+):\s*(.+)$",
+        original,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if save_research_memory_match:
+        return _save_research_memory_note(save_research_memory_match.group(1), save_research_memory_match.group(2)), "fast-command"
+
+    tagged_save_research_match = re.match(
+        r"^\s*research memory save\s+topic\s+(.+?)\s+tags\s+(.+?)\s+note\s+(.+)$",
+        original,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if tagged_save_research_match:
+        return (
+            _save_research_memory_note(
+                tagged_save_research_match.group(1),
+                tagged_save_research_match.group(3),
+                tags=tagged_save_research_match.group(2),
+            ),
+            "fast-command",
+        )
+
     if normalized in {"copy current url", "copy current link", "copy this url", "copy this page url"}:
         return _run_tool(tools, "chrome_copy_current_url", session_context)
 
@@ -1224,16 +1469,6 @@ def maybe_handle_fast_command(
     topic_to_start = _after_prefix(original, ("start research topic ", "create research topic ", "new research topic "))
     if topic_to_start:
         return _run_tool(tools, "research_start_topic", session_context, topic=topic_to_start)
-
-    save_research_match = re.match(r"^\s*save research note\s+([^:]+):\s*(.+)$", original, flags=re.IGNORECASE | re.DOTALL)
-    if save_research_match:
-        return _run_tool(
-            tools,
-            "research_save_note",
-            session_context,
-            topic=save_research_match.group(1).strip(),
-            note=save_research_match.group(2).strip(),
-        )
 
     research_match = re.match(r"^\s*research\s+([^:]+):\s*(.+)$", original, flags=re.IGNORECASE | re.DOTALL)
     if research_match:

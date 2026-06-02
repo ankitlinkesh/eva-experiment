@@ -66,6 +66,20 @@ def _resource_hint_lines(state: EvaRuntimeState) -> list[str]:
     return ["", "Resource hint:", *hints]
 
 
+def _relevant_research_memory_lines(state: EvaRuntimeState) -> list[str]:
+    if not state.relevant_memory:
+        return []
+    try:
+        from ..research_memory.context import format_research_context_for_state
+
+        formatted = format_research_context_for_state(state.relevant_memory)
+    except Exception:
+        formatted = ""
+    if not formatted:
+        return []
+    return ["", *formatted.splitlines()]
+
+
 def _header(kind: str) -> list[str]:
     return [
         f"Eva v2 {kind} preview",
@@ -100,10 +114,10 @@ def format_v2_route_response(state: EvaRuntimeState) -> str:
             "",
             "Safety:",
             _safety_line(state),
-            "",
-            "No action was executed.",
         ]
     )
+    lines.extend(_relevant_research_memory_lines(state))
+    lines.extend(["", "No action was executed."])
     return "\n".join(lines)
 
 
@@ -150,9 +164,10 @@ def format_v2_execute_response(state: EvaRuntimeState) -> str:
         execution_line = "Executed through v2 read-only delegate."
     else:
         execution_line = f"Executed through {executed_by}."
+    lines.append(execution_line)
+    lines.extend(_relevant_research_memory_lines(state))
     lines.extend(
         [
-            execution_line,
             "",
             "Result:",
             state.execution_summary or "The allowlisted action completed without a detailed summary.",
@@ -261,6 +276,7 @@ def format_v2_plan_response(state: EvaRuntimeState) -> str:
         ]
     )
     lines.extend(_plan_lines(state))
+    lines.extend(_relevant_research_memory_lines(state))
     lines.extend(_resource_hint_lines(state))
     lines.extend(["", "No action was executed."])
     return "\n".join(lines)
@@ -283,6 +299,7 @@ def format_v2_dry_run_response(state: EvaRuntimeState) -> str:
         ]
     )
     lines.extend(_plan_lines(state))
+    lines.extend(_relevant_research_memory_lines(state))
     lines.extend(_resource_hint_lines(state))
     lines.extend(
         [

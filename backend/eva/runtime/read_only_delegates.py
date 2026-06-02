@@ -73,8 +73,34 @@ def execute_code_readonly_delegate(state: EvaRuntimeState) -> tuple[bool, str]:
 def execute_research_readonly_delegate(state: EvaRuntimeState) -> tuple[bool, str]:
     action_type = _primary_action_type(state)
     query = _query_from_intent(state)
+    intent_text = str(state.normalized_intent or state.user_request or "").lower()
     if action_type == "research.status":
-        return True, _research_status_summary()
+        if "research memory retrieval status" in intent_text:
+            result = _research_memory_retrieval_status_summary()
+            _trace_research_memory(state, "research_memory_retrieval_status", {"query": ""}, result)
+            return True, result
+        result = _research_memory_status_summary()
+        _trace_research_memory(state, "research_memory_status", {"query": ""}, result)
+        return True, result
+    if action_type == "research.memory_search":
+        if _is_research_memory_full_dump_request(intent_text):
+            result = (
+                "Research Memory full dump refused. Use `research memory search <query>`, "
+                "`research memory export`, or `research memory topics` instead."
+            )
+            _trace_research_memory(state, "research_memory_full_dump_refused", {"query": ""}, result)
+            return True, result
+        result = _research_memory_search_summary(query)
+        _trace_research_memory(state, "research_memory_search", {"query": query}, result)
+        return True, result
+    if action_type == "research.memory_topic_summary":
+        result = _research_memory_topic_summary(query)
+        _trace_research_memory(state, "research_topic_summary", {"topic": query}, result)
+        return True, result
+    if action_type == "research.memory_save":
+        result = _research_memory_save_summary(state)
+        _trace_research_memory(state, "research_memory_save", {"topic": _research_note_parts(state)[0]}, result)
+        return True, result
     if action_type in {"research.public_search", "research.public_summary", "research.safe_lookup"}:
         return True, _research_lookup_summary(query)
     return False, "Research read-only delegate unavailable: this action type is not allowlisted."
@@ -101,6 +127,12 @@ def _query_from_intent(state: EvaRuntimeState) -> str:
     lowered = text.lower()
     prefixes = (
         "search latest ",
+        "search research memory ",
+        "research memory search ",
+        "research memory retrieve ",
+        "summarize research topic ",
+        "summarise research topic ",
+        "research topic ",
         "research ",
         "recall what you remember about ",
         "recall ",
@@ -337,6 +369,91 @@ def _research_status_summary() -> str:
     )
 
 
+def _research_memory_status_summary() -> str:
+    try:
+        from ..research_memory.status import format_research_memory_status
+
+        return format_research_memory_status()
+    except Exception as exc:
+        return f"Research Memory v2 status: unavailable safely ({str(exc)[:160]})."
+
+
+def _research_memory_retrieval_status_summary() -> str:
+    try:
+        from ..research_memory.retrieval import retrieval_status
+
+        return retrieval_status()
+    except Exception as exc:
+        return f"Research Memory retrieval status: unavailable safely ({str(exc)[:160]})."
+
+
+def _research_memory_search_summary(query: str) -> str:
+    clean_query = query or "research"
+    if _looks_private_research(clean_query):
+        return "Research Memory v2 refused: private/logged-in research requests are not stored or searched automatically."
+    try:
+        from ..research_memory.retrieval import format_retrieval_results, retrieve_research
+
+        return format_retrieval_results(retrieve_research(clean_query))
+    except Exception as exc:
+        return f"Research Memory v2 search unavailable safely for {clean_query}: {str(exc)[:160]}."
+
+
+def _research_memory_topic_summary(topic: str) -> str:
+    clean_topic = topic or "research"
+    if _looks_private_research(clean_topic):
+        return "Research Memory v2 refused: private/logged-in research topics are not summarized automatically."
+    try:
+        from ..research_memory.status import format_research_topic_summary
+
+        return format_research_topic_summary(clean_topic)
+    except Exception as exc:
+        return f"Research Memory v2 topic summary unavailable safely for {clean_topic}: {str(exc)[:160]}."
+
+
+def _research_note_parts(state: EvaRuntimeState) -> tuple[str, str]:
+    text = str(state.normalized_intent or state.user_request or "").strip()
+    lowered = text.lower()
+    for prefix in ("save research note ", "remember research "):
+        if lowered.startswith(prefix):
+            payload = text[len(prefix) :].strip()
+            if ":" in payload:
+                topic, note = payload.split(":", 1)
+                return topic.strip(), note.strip()
+    return "general", text
+
+
+def _research_memory_save_summary(state: EvaRuntimeState) -> str:
+    topic, note = _research_note_parts(state)
+    if not topic or not note:
+        return "Research Memory v2 save needs `save research note <topic>: <note>`."
+    try:
+        from ..research_memory.models import ResearchMemoryItem
+        from ..research_memory.sources import extract_tags, looks_private_or_sensitive, redact_research_text
+        from ..research_memory.store import add_research_item
+
+        redacted_note, was_redacted = redact_research_text(note)
+        item = add_research_item(
+            ResearchMemoryItem(
+                id="",
+                topic=topic,
+                title=topic,
+                summary=redacted_note[:1500],
+                content_preview=redacted_note,
+                source_type="user_note",
+                tags=extract_tags(f"{topic} {note}"),
+                confidence="medium",
+                private=looks_private_or_sensitive(note),
+                redacted=was_redacted,
+                provenance="v2_read_only_delegate:research_memory_save",
+            )
+        )
+    except Exception as exc:
+        return f"Research Memory v2 save unavailable safely for {topic}: {str(exc)[:160]}."
+    suffix = " Sensitive-looking text was redacted before storage." if item.redacted else ""
+    return f"Saved research note locally under {item.topic}. Item: {item.id}.{suffix}"
+
+
 def _research_lookup_summary(query: str) -> str:
     clean_query = query or "requested topic"
     if _looks_private_research(clean_query):
@@ -377,7 +494,24 @@ def _research_lookup_summary(query: str) -> str:
 
 def _looks_private_research(query: str) -> bool:
     text = query.lower()
-    return any(marker in text for marker in ("logged in", "private page", "gmail", "email", "chat", "bypass", "hidden credential"))
+    return any(marker in text for marker in ("logged in", "private page", "gmail", "email", "chat", "bypass", "paywall", "hidden credential", "cookies", "localstorage", "sessionstorage", "scrape"))
+
+
+def _is_research_memory_full_dump_request(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return "research memory" in lowered and any(marker in lowered for marker in ("dump all", "show all", "print all", "full dump"))
+
+
+def _trace_research_memory(state: EvaRuntimeState, event: str, args: dict[str, object], result: str) -> None:
+    trace_id = str(getattr(state, "trace_id", "") or "")
+    if not trace_id:
+        return
+    safe_args = {key: str(value)[:180] for key, value in args.items()}
+    safe_args["result_length"] = len(str(result or ""))
+    try:
+        log_tool_call(trace_id, event, safe_args, str(result or "")[:500])
+    except Exception:
+        return
 
 
 def _memory_status_summary() -> str:

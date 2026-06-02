@@ -27,6 +27,32 @@ def classify_intent_node(state: EvaRuntimeState) -> EvaRuntimeState:
 
 def retrieve_memory_node(state: EvaRuntimeState) -> EvaRuntimeState:
     state.relevant_memory = []
+    try:
+        from ..research_memory.context import build_research_context_for_request, should_use_research_memory_context
+
+        request = state.normalized_intent or state.user_request
+        if should_use_research_memory_context(request):
+            state.relevant_memory = build_research_context_for_request(request, limit=3)
+            state.observations.append(
+                {
+                    "source": "research_memory_context",
+                    "summary": "Local Research Memory context retrieved." if state.relevant_memory else "No matching saved research found.",
+                    "item_count": len(state.relevant_memory),
+                }
+            )
+    except Exception as exc:
+        state.relevant_memory = [
+            {
+                "kind": "research_memory_unavailable",
+                "title": "Research Memory unavailable",
+                "summary": f"Local Research Memory context could not be retrieved safely: {str(exc)[:140]}.",
+                "topic": "Research Memory",
+                "tags": [],
+                "source_type": "local_status",
+                "match": "unavailable",
+                "quality_warnings": [],
+            }
+        ]
     state.touch()
     return state
 

@@ -62,6 +62,10 @@ RESEARCH_READONLY_ACTIONS = {
     "research.public_summary",
     "research.status",
     "research.safe_lookup",
+    "research.memory_status",
+    "research.memory_search",
+    "research.memory_topic_summary",
+    "research.memory_save",
 }
 RESEARCH_REFUSED_ACTIONS = {
     "research.private_account_read",
@@ -138,7 +142,7 @@ def is_allowlisted_code_readonly_action(state: EvaRuntimeState) -> bool:
 def is_allowlisted_research_readonly_action(state: EvaRuntimeState) -> bool:
     if state.selected_agent != "research":
         return False
-    if not _resource_executable("eva-research-sqlite") and not _resource_executable("tavily-existing"):
+    if not _resource_executable("eva-research-memory-v2") and not _resource_executable("eva-research-sqlite") and not _resource_executable("tavily-existing"):
         return False
     return bool(_action_types(state) & RESEARCH_READONLY_ACTIONS)
 
@@ -178,7 +182,7 @@ def get_execution_refusal_reason(state: EvaRuntimeState) -> str:
         return "Arbitrary shell is blocked in Phase 3."
     if any(marker in text for marker in ("install ", "pip " + "install", "package install")):
         return "Package install is not allowed in Phase 4 read-only execution."
-    if any(marker in text for marker in ("logged in", "private page", "private account", "bypass login", "hidden credential")):
+    if any(marker in text for marker in ("logged in", "private page", "private account", "bypass login", "bypass paywall", "paywall", "hidden credential", "cookies", "localstorage", "sessionstorage", "scrape my logged-in", "gmail", "email", "private chat", "read chat", "chat history")):
         return "Private or logged-in page reading is not allowed in Phase 4 read-only execution."
     if any(marker in text for marker in ("send whatsapp", "send message", "post ", "submit", "purchase", "buy ")):
         return "Confirmation required for external message sending or posting; Phase 3 execution bridge refuses it."

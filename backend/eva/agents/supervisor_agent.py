@@ -68,6 +68,9 @@ def select_agent_with_reason(intent: str, state: Any | None = None) -> AgentSele
     if _looks_media_request(text):
         media = next(agent for agent in agents if agent.name == "media")
         return AgentSelection(media, max(0.92, media.can_handle(text, state)), "Media/music intent should preview Spotify or YouTube media skills.")
+    if _looks_research_request(text):
+        research = next(agent for agent in agents if agent.name == "research")
+        return AgentSelection(research, max(0.90, research.can_handle(text, state)), "Research intent should preview Research Memory v2 or safe public research helpers.")
     if _looks_memory_request(text):
         memory = next(agent for agent in agents if agent.name == "memory")
         return AgentSelection(memory, max(0.88, memory.can_handle(text, state)), "Memory intent should preview local SQLite memory handling.")
@@ -104,6 +107,13 @@ def _looks_safety_sensitive(text: str) -> bool:
             "logged in",
             "private page",
             "bypass login",
+            "gmail",
+            "email",
+            "private chat",
+            "read chat",
+            "chat history",
+            "cookies",
+            "paywall",
             "send whatsapp",
             "send message",
             "post this",
@@ -132,6 +142,23 @@ def _looks_browser_request(text: str) -> bool:
 
 def _looks_memory_request(text: str) -> bool:
     return any(marker in text for marker in ("remember that", "remember this", "recall", "what do you remember", "save this memory", "memory"))
+
+
+def _looks_research_request(text: str) -> bool:
+    return any(
+        marker in text
+        for marker in (
+            "research memory",
+            "search research memory",
+            "research topic",
+            "save research note",
+            "remember research",
+            "research status",
+            "search latest",
+            "public research",
+            "find sources",
+        )
+    )
 
 
 def _looks_code_readonly_request(text: str) -> bool:
