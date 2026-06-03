@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Intentional fake secret-pattern fixture for execution-trace tests. Not a real secret.
+
 
 def emit(case: str, passed: bool, **payload: Any) -> int:
     ok = bool(passed)

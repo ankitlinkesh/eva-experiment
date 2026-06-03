@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Intentional fake secret-pattern fixture for redaction tests. Not a real secret.
+
 from backend.eva.agent.action_model import AgentAction, AgentObservation
 from backend.eva.agent.checkpoints import CheckpointStore
 from backend.eva.agent.executor import ToolExecutor
