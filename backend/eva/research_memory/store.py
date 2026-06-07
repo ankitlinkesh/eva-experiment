@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -10,6 +12,29 @@ from .config import MAX_NOTE_LENGTH, MAX_SOURCE_TITLE_LENGTH, MAX_SUMMARY_LENGTH
 from .models import ResearchMemoryItem, ResearchMemoryStatus, ResearchSearchResult
 from .quality import content_hash, normalize_tags, quality_score, quality_warnings
 from .sources import extract_domain, extract_tags, infer_topic, normalize_source_url, redact_research_text
+
+
+@dataclass
+class ResearchRecallStats:
+    item_id: str
+    recall_count: int = 0
+    last_recalled_at: str | None = None
+    query_hashes: list[str] | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass
+class TopRecalledResearchItem:
+    item_id: str
+    title: str
+    topic: str
+    recall_count: int
+    last_recalled_at: str | None
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
 
 
 def _now() -> str:
@@ -67,6 +92,13 @@ def init_research_memory_store(path: str | Path | None = None) -> Path:
                 source_type TEXT NOT NULL,
                 added_at TEXT NOT NULL,
                 notes TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS research_memory_recall_stats (
+                item_id TEXT PRIMARY KEY,
+                recall_count INTEGER NOT NULL DEFAULT 0,
+                last_recalled_at TEXT,
+                query_hashes_json TEXT NOT NULL DEFAULT '[]'
             );
             """
         )
@@ -286,6 +318,7 @@ def delete_research_item(item_id: str, path: str | Path | None = None) -> bool:
     with _connect(path) as db:
         cursor = db.execute("DELETE FROM research_items WHERE id=?", (str(item_id or ""),))
         db.execute("DELETE FROM research_sources WHERE id=?", (str(item_id or ""),))
+        db.execute("DELETE FROM research_memory_recall_stats WHERE item_id=?", (str(item_id or ""),))
     return cursor.rowcount > 0
 
 
@@ -300,7 +333,91 @@ def clear_research_topic(topic: str, path: str | Path | None = None) -> int:
         cursor = db.execute("DELETE FROM research_items WHERE lower(topic)=lower(?)", (clean_topic,))
         for item_id in item_ids:
             db.execute("DELETE FROM research_sources WHERE id=?", (item_id,))
+            db.execute("DELETE FROM research_memory_recall_stats WHERE item_id=?", (item_id,))
     return int(cursor.rowcount or 0)
+
+
+def record_research_recall(item_ids: list[str], query: str, path: str | Path | None = None) -> None:
+    clean_query = " ".join(str(query or "").lower().split())
+    clean_ids = [str(item_id or "").strip() for item_id in item_ids if str(item_id or "").strip()]
+    if not clean_query or not clean_ids:
+        return
+    query_hash = hashlib.sha256(clean_query.encode("utf-8")).hexdigest()
+    now = _now()
+    init_research_memory_store(path)
+    with _connect(path) as db:
+        existing_ids = {
+            str(row["id"])
+            for row in db.execute(
+                f"SELECT id FROM research_items WHERE id IN ({','.join('?' for _ in clean_ids)})",
+                clean_ids,
+            ).fetchall()
+        }
+        for item_id in clean_ids:
+            if item_id not in existing_ids:
+                continue
+            row = db.execute("SELECT * FROM research_memory_recall_stats WHERE item_id=?", (item_id,)).fetchone()
+            hashes = _recall_hashes(row)
+            if query_hash not in hashes:
+                hashes.append(query_hash)
+            if row:
+                db.execute(
+                    """
+                    UPDATE research_memory_recall_stats
+                    SET recall_count=recall_count+1, last_recalled_at=?, query_hashes_json=?
+                    WHERE item_id=?
+                    """,
+                    (now, json.dumps(hashes[-25:]), item_id),
+                )
+            else:
+                db.execute(
+                    """
+                    INSERT INTO research_memory_recall_stats(item_id, recall_count, last_recalled_at, query_hashes_json)
+                    VALUES(?, 1, ?, ?)
+                    """,
+                    (item_id, now, json.dumps(hashes[-25:])),
+                )
+
+
+def get_recall_stats(item_id: str, path: str | Path | None = None) -> ResearchRecallStats:
+    clean_id = str(item_id or "").strip()
+    init_research_memory_store(path)
+    with _connect(path) as db:
+        row = db.execute("SELECT * FROM research_memory_recall_stats WHERE item_id=?", (clean_id,)).fetchone()
+    if not row:
+        return ResearchRecallStats(item_id=clean_id, recall_count=0, last_recalled_at=None, query_hashes=[])
+    return ResearchRecallStats(
+        item_id=clean_id,
+        recall_count=int(row["recall_count"] or 0),
+        last_recalled_at=row["last_recalled_at"],
+        query_hashes=_recall_hashes(row),
+    )
+
+
+def get_top_recalled_items(limit: int = 10, path: str | Path | None = None) -> list[TopRecalledResearchItem]:
+    init_research_memory_store(path)
+    safe_limit = max(1, min(50, int(limit or 10)))
+    with _connect(path) as db:
+        rows = db.execute(
+            """
+            SELECT s.item_id, s.recall_count, s.last_recalled_at, i.title, i.topic
+            FROM research_memory_recall_stats s
+            JOIN research_items i ON i.id = s.item_id
+            ORDER BY s.recall_count DESC, s.last_recalled_at DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [
+        TopRecalledResearchItem(
+            item_id=str(row["item_id"]),
+            title=str(row["title"]),
+            topic=str(row["topic"]),
+            recall_count=int(row["recall_count"] or 0),
+            last_recalled_at=row["last_recalled_at"],
+        )
+        for row in rows
+    ]
 
 
 def _item(row: sqlite3.Row) -> ResearchMemoryItem:
@@ -332,6 +449,16 @@ def _item(row: sqlite3.Row) -> ResearchMemoryItem:
         quality_score=float(row["quality_score"] or 0),
         quality_warnings=[str(warning) for warning in warnings if str(warning).strip()],
     )
+
+
+def _recall_hashes(row: sqlite3.Row | None) -> list[str]:
+    if not row:
+        return []
+    try:
+        values = json.loads(row["query_hashes_json"] or "[]")
+    except (KeyError, IndexError, json.JSONDecodeError):
+        values = []
+    return [str(value) for value in values if str(value).strip()]
 
 
 def _terms(text: str) -> set[str]:

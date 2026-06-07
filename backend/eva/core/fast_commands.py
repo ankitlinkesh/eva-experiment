@@ -1005,6 +1005,59 @@ def maybe_handle_fast_command(
 
         return format_public_ready_check(), "fast-command"
 
+    if normalized == "eva capabilities":
+        from ..capabilities.registry import format_capability_summary
+
+        return format_capability_summary(), "fast-command"
+
+    if normalized == "eva capabilities safe":
+        from ..capabilities.registry import format_capability_summary
+
+        return format_capability_summary(safe_only=True), "fast-command"
+
+    if normalized == "eva capabilities experimental":
+        from ..capabilities.registry import format_capability_summary
+
+        return format_capability_summary(experimental_only=True), "fast-command"
+
+    if normalized in {"eva capabilities matrix", "eva capability permissions"}:
+        from ..capabilities.permissions import format_capability_permission_matrix
+
+        return format_capability_permission_matrix(), "fast-command"
+
+    if normalized == "eva capability providers":
+        from ..capabilities.registry import format_capability_providers
+
+        return format_capability_providers(), "fast-command"
+
+    capability_permission_id = _after_prefix(original, ("eva capability permission ",))
+    if capability_permission_id:
+        from ..capabilities.permissions import format_capability_permission_detail
+
+        return format_capability_permission_detail(capability_permission_id.strip()), "fast-command"
+
+    capability_schema_id = _after_prefix(original, ("eva capability schema ", "eva tool schema preview "))
+    if capability_schema_id:
+        from ..capabilities.tool_schemas import format_tool_schema_preview
+
+        return format_tool_schema_preview(capability_schema_id.strip()), "fast-command"
+
+    if normalized == "eva tool schemas":
+        from ..capabilities.tool_schemas import format_tool_schema_catalog
+
+        return format_tool_schema_catalog(), "fast-command"
+
+    if normalized == "eva threat model status":
+        from ..capabilities.permissions import format_threat_model_status
+
+        return format_threat_model_status(), "fast-command"
+
+    capability_id = _after_prefix(original, ("eva capability ",))
+    if capability_id:
+        from ..capabilities.registry import format_capability_detail
+
+        return format_capability_detail(None, capability_id.strip()), "fast-command"
+
     if normalized == "eva demo scenarios":
         from ..demo.runner import format_demo_scenarios
 
@@ -1149,6 +1202,26 @@ def maybe_handle_fast_command(
         from ..research_memory.retrieval import retrieval_status
 
         return retrieval_status(), "fast-command"
+
+    if normalized == "research memory ranking status":
+        from ..research_memory.ranking import format_ranking_status
+
+        return format_ranking_status(), "fast-command"
+
+    if normalized == "research memory recall stats":
+        from ..research_memory.ranking import format_recall_stats
+
+        return format_recall_stats(), "fast-command"
+
+    if normalized == "research memory promote candidates":
+        from ..research_memory.ranking import format_promotion_candidates
+
+        return format_promotion_candidates(), "fast-command"
+
+    if normalized == "research memory review memory":
+        from ..research_memory.ranking import format_memory_review
+
+        return format_memory_review(), "fast-command"
 
     retrieval_plan = _after_prefix(original, ("research memory retrieval plan ",))
     if retrieval_plan:

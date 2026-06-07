@@ -14,7 +14,8 @@ For public/community releases, Eva is source-available under the PolyForm Noncom
 - Import/export/cleanup utilities for local notes.
 - Tags, quality warnings, duplicate preview, and filtered search.
 - Optional vector-search preparation with a lightweight local fallback for tests.
-- Lexical-first hybrid retrieval with topic, tag, and source filters.
+- Lexical-first hybrid retrieval with topic, tag, source filters, quality scoring, small recency scoring, duplicate/low-quality penalties, and diversity reranking.
+- Recall statistics, promotion candidate preview, ranking explanations, and memory review commands.
 - Explicit v2 context injection for prompts that ask to use saved/local research memory.
 - Human-readable help, command reference, examples, safety notes, and phase summary commands.
 
@@ -46,6 +47,10 @@ Search/retrieve:
 - `research memory retrieve <query> source <source_type>`
 - `research memory retrieval status`
 - `research memory retrieval plan <query>`
+- `research memory ranking status`
+- `research memory recall stats`
+- `research memory promote candidates`
+- `research memory review memory`
 
 Topics/tags/quality:
 
@@ -95,13 +100,17 @@ Search/retrieve:
 - `research memory search Eva tag memory`
 - `research memory retrieve Eva`
 - `research memory retrieval plan Eva`
+- `research memory ranking status`
+- `research memory promote candidates`
 
 Review and cleanup:
 
 - `research memory topics`
 - `research memory tags`
+- `research memory review memory`
 - `research memory quality`
 - `research memory duplicates`
+- `research memory promote candidates`
 - `research memory clear topic Test confirm`
 
 Explicit v2 usage:
@@ -117,8 +126,14 @@ Research Memory:
 - Stores local sanitized notes.
 - Uses lexical retrieval by default.
 - Has vector search prepared but disabled by default.
+- Uses diversity reranking to reduce repeated/near-duplicate results.
+- Uses small recency scoring without hiding older notes.
+- Stores recall stats as hashed query references, not raw queries.
+- Keeps promotion candidates preview-only.
 - Does not use cloud embeddings.
 - Does not use cloud summarization.
+- Does not import or require MemOS, Redis, sqlite-vec, Ollama embeddings, or package installs.
+- Does not enable background dreaming, auto-reflection, auto-promotion, auto-memory writes, or auto-delete.
 - Does not scrape private, logged-in, Gmail, chat, or paywall pages.
 - Does not read cookies, tokens, localStorage, sessionStorage, or passwords.
 - Does not read `.env.local`.
@@ -153,6 +168,31 @@ Vector search is disabled by default. The current interface is a local-first pre
 Chroma/Qdrant are not active yet. No cloud embedding or cloud summarization path is enabled.
 
 Lexical search and hybrid retrieval remain the default practical retrieval behavior.
+
+## Ranking and Review
+
+Phase 9C adds a local, dependency-free ranking upgrade inspired by memory-system architecture ideas. It does not copy code from MemOS and does not add MemOS as a dependency.
+
+Ranking behavior:
+
+- Base lexical relevance remains strongest.
+- Quality score provides a medium boost.
+- Recency provides only a small deterministic boost.
+- Duplicate-like and low-quality notes are deprioritized, not deleted.
+- Diversity reranking reduces repeated/near-duplicate results.
+- Retrieval output includes short match/ranking reasons.
+
+Recall stats:
+
+- Recall count is updated only after selected retrieval results are returned.
+- Query references are stored as SHA-256 hashes of normalized queries.
+- Normal output shows recall counts and last recalled time, not raw query strings.
+
+Promotion and review:
+
+- `research memory promote candidates` is preview-only.
+- `research memory review memory` summarizes item count, low-quality notes, duplicate-like groups, top recalled items, promotion candidates, and safe next commands.
+- No promotion, deletion, merge, reflection, or write runs automatically.
 
 ## Limitations
 

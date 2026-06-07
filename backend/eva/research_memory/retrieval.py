@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .diversity import rerank_for_diversity
 from .models import ResearchMemoryItem, ResearchSearchResult
 from .quality import find_duplicate_groups, normalize_tags
-from .store import list_research_items, search_research_items
+from .ranking import compute_combined_retrieval_score, compute_recency_score, explain_ranking_factors
+from .store import list_research_items, record_research_recall, search_research_items
 from .vector_index import is_vector_search_enabled, search_research_vectors, vector_search_status
 
 
@@ -39,11 +41,19 @@ def retrieve_research(
     else:
         notes.append("Vector search is disabled by default.")
     deduped = _mark_and_reduce_duplicates(ranked)
+    diverse = rerank_for_diversity(deduped, limit=safe_limit, lambda_param=0.65)
+    selected = diverse[:safe_limit]
+    if len(selected) > 1:
+        for item in selected:
+            if "Diversity reranking reduced repeated results." not in item.reason:
+                item.reason = f"{item.reason}; Diversity reranking reduced repeated results."
+        notes.append("Diversity reranking reduces repeated/near-duplicate results.")
+    record_research_recall([item.id for item in selected], clean_query)
     return ResearchRetrievalResult(
         query=clean_query,
         mode="local_hybrid",
         filters=filters,
-        results=deduped[:safe_limit],
+        results=selected,
         plan_notes=notes,
     )
 
@@ -56,7 +66,9 @@ def explain_retrieval_plan(query: str, topic: str | None = None, tag: str | None
         "- Use lexical baseline search across local Research Memory v2.",
         "- Apply topic/tag/source filters before ranking." if filters else "- No topic/tag/source filters requested.",
         "- Boost higher quality_score notes.",
+        "- Add small deterministic recency scoring; old notes are not hidden.",
         "- Deprioritize duplicate-like or low-quality notes; exact duplicates may be collapsed in output.",
+        "- Apply diversity reranking to reduce repeated/near-duplicate final results.",
         f"- Vector search: {'enabled' if status.enabled else 'disabled'} by default; provider {status.provider}.",
         "No cloud calls, cloud embeddings, Chroma/Qdrant activation, or private page scraping are used in this phase.",
     ]
@@ -70,17 +82,31 @@ def rank_research_results(results: list[object], query: str, task_context: objec
         search_result = _as_search_result(result, query)
         quality = max(0.0, min(1.0, float(search_result.quality_score or 0.0)))
         warnings = [warning for warning in search_result.quality_warnings if warning != "hash available"]
-        adjusted = float(search_result.score or 0.0)
-        adjusted += quality * 3.0
+        recency = compute_recency_score(search_result.created_at)
+        duplicate_penalty = 0.0
         if search_result.id in duplicate_ids:
-            adjusted -= 1.2
+            duplicate_penalty = 1.2
             if "duplicate-like" not in warnings:
                 warnings.append("duplicate-like")
-        adjusted -= len(warnings) * 0.35
-        search_result.score = round(adjusted, 4)
+        low_quality_penalty = len(warnings) * 0.35
+        search_result.score = compute_combined_retrieval_score(
+            search_result.score,
+            quality_score=quality,
+            recency_score=recency,
+            duplicate_penalty=duplicate_penalty,
+            low_quality_penalty=low_quality_penalty,
+        )
         search_result.quality_warnings = warnings or search_result.quality_warnings
-        if "quality" not in search_result.reason.lower():
-            search_result.reason = f"{search_result.reason}; quality boost {quality:.2f}"
+        explanation = explain_ranking_factors(
+            search_result,
+            {
+                "quality_score": quality,
+                "recency_score": recency,
+                "duplicate_penalty": duplicate_penalty,
+                "low_quality_penalty": low_quality_penalty,
+            },
+        )
+        search_result.reason = f"{search_result.reason}; {explanation}"
         ranked.append(search_result)
     return sorted(ranked, key=lambda item: item.score, reverse=True)
 
@@ -110,7 +136,7 @@ def retrieval_status() -> str:
             "Mode: local hybrid retrieval planner.",
             "Baseline: lexical baseline search over local Research Memory v2.",
             "Filters: topic, tag, and source type.",
-            "Ranking: lexical match plus quality_score boost; duplicate-like and low-quality notes are deprioritized.",
+            "Ranking: lexical match plus quality_score boost, small recency boost, duplicate/low-quality penalties, and diversity reranking.",
             f"Vector search: {'enabled' if status.enabled else 'disabled by default'} using {status.provider}.",
             "Cloud calls: none. Raw vectors and database paths are never shown in normal output.",
         ]
