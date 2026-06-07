@@ -84,6 +84,22 @@ _VIRTUAL_PERMISSION_OVERRIDES: dict[str, CapabilityPermission] = {
         confirm_phrase_required=True,
         reason="Clears one named local research topic only when the command includes the required confirm word.",
     ),
+    "eva_v2.execute_safe": CapabilityPermission(
+        capability_id="eva_v2.execute_safe",
+        risk_level="medium",
+        read_only=True,
+        writes_local_data=False,
+        external_effect=False,
+        requires_confirmation=False,
+        requires_override=False,
+        public_mode_allowed=True,
+        private_mode_allowed=True,
+        blocked_by_default=False,
+        explicit_user_action=True,
+        silent_background_write=False,
+        confirm_phrase_required=False,
+        reason="Safe execution bridge metadata is visible for planning, but risky confirmed execution remains future-gated.",
+    ),
 }
 
 

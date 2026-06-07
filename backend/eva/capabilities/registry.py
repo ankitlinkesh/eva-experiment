@@ -143,6 +143,18 @@ def format_capability_detail(registry: CapabilityRegistry | None, capability_id:
     from .tool_schemas import capability_to_tool_schema
 
     schema_status = "available" if capability_to_tool_schema(capability.id) else "not registered"
+    resource_lines: list[str] = []
+    try:
+        from .resource_mapping import resolve_capability
+
+        resolution = resolve_capability(capability.id)
+        resource_lines = [
+            f"Resource: {resolution.resource_id or 'none'}",
+            f"Resolution status: {resolution.final_status}",
+            f"Execution path: {resolution.execution_path}",
+        ]
+    except Exception:
+        resource_lines = ["Resource: mapping unavailable"]
     return "\n".join(
         [
             "Capability detail",
@@ -159,6 +171,7 @@ def format_capability_detail(registry: CapabilityRegistry | None, capability_id:
             f"Verifier: {verifier}",
             format_permission_summary_line(capability.id),
             f"Tool schema preview: {schema_status}",
+            *resource_lines,
             "",
             "Description:",
             capability.description,

@@ -990,6 +990,82 @@ def maybe_handle_fast_command(
 
         return format_release_status(), "fast-command"
 
+    if normalized == "eva planner status":
+        from ..planner.status import format_planner_status
+
+        return format_planner_status(), "fast-command"
+
+    if normalized in {"eva plan templates", "eva planner templates"}:
+        from ..planner.templates import format_plan_templates
+
+        return format_plan_templates(), "fast-command"
+
+    planner_validate_goal = _after_prefix(original, ("eva plan validate ", "eva planner validate "))
+    if planner_validate_goal:
+        from ..planner.decomposer import create_task_plan
+        from ..planner.validation import format_plan_validation
+
+        plan = create_task_plan(planner_validate_goal.strip())
+        return format_plan_validation(plan), "fast-command"
+
+    planner_review_goal = _after_prefix(original, ("eva plan review ", "eva planner review "))
+    if planner_review_goal:
+        from ..planner.critique import format_plan_review
+        from ..planner.decomposer import create_task_plan
+
+        plan = create_task_plan(planner_review_goal.strip())
+        return format_plan_review(plan), "fast-command"
+
+    planner_goal = _after_prefix(original, ("eva plan ", "eva planner plan ", "eva planner explain "))
+    if planner_goal:
+        from ..planner.decomposer import create_task_plan
+        from ..planner.formatter import format_task_plan
+
+        plan = create_task_plan(planner_goal.strip())
+        return format_task_plan(plan), "fast-command"
+
+    if normalized in {"eva agent framework status", "eva agents framework status"}:
+        from ..agents.status import format_agent_framework_status
+
+        return format_agent_framework_status(), "fast-command"
+
+    if normalized in {"eva agents", "eva agents status", "eva agent list"}:
+        from ..agents.registry import format_agents_status
+
+        return format_agents_status(), "fast-command"
+
+    if normalized == "eva agents matrix":
+        from ..agents.registry import format_agent_capability_matrix
+
+        return format_agent_capability_matrix(), "fast-command"
+
+    agent_dry_run_goal = _after_prefix(original, ("eva agents dry run plan ",))
+    if agent_dry_run_goal:
+        from ..agents.delegation import format_agent_dry_run_for_goal
+
+        return format_agent_dry_run_for_goal(agent_dry_run_goal.strip()), "fast-command"
+
+    agent_capabilities_name = _after_prefix(original, ("eva agent capabilities ",))
+    if agent_capabilities_name:
+        from ..agents.registry import format_agent_capabilities
+
+        return format_agent_capabilities(agent_capabilities_name.strip()), "fast-command"
+
+    agent_explain_name = _after_prefix(original, ("eva agent explain ",))
+    if agent_explain_name:
+        from ..agents.registry import get_agent
+
+        agent = get_agent(agent_explain_name.strip())
+        if not agent:
+            return f"Agent explain\n\nAgent `{agent_explain_name.strip()}` was not found.\nUse `eva agent list` to view registered agents.", "fast-command"
+        return agent.explain(), "fast-command"
+
+    agent_detail_name = _after_prefix(original, ("eva agent ",))
+    if agent_detail_name:
+        from ..agents.registry import format_agent_detail
+
+        return format_agent_detail(agent_detail_name.strip()), "fast-command"
+
     if normalized == "eva public checklist":
         from ..release.status import format_public_release_checklist
 
@@ -1051,6 +1127,50 @@ def maybe_handle_fast_command(
         from ..capabilities.permissions import format_threat_model_status
 
         return format_threat_model_status(), "fast-command"
+
+    if normalized == "eva capability resource matrix":
+        from ..capabilities.resource_mapping import format_capability_resource_matrix
+
+        return format_capability_resource_matrix(), "fast-command"
+
+    if normalized == "eva capabilities available":
+        from ..capabilities.resource_mapping import format_capability_resource_matrix
+
+        return format_capability_resource_matrix("available"), "fast-command"
+
+    if normalized in {"eva capabilities preview only", "eva capabilities preview-only"}:
+        from ..capabilities.resource_mapping import format_capability_resource_matrix
+
+        return format_capability_resource_matrix("preview_only"), "fast-command"
+
+    if normalized == "eva capabilities blocked":
+        from ..capabilities.resource_mapping import format_capability_resource_matrix
+
+        return format_capability_resource_matrix("blocked"), "fast-command"
+
+    plan_goal = _after_prefix(original, ("eva capability plan resources ",))
+    if plan_goal:
+        from ..capabilities.resource_mapping import format_capability_plan_resources
+
+        return format_capability_plan_resources(plan_goal.strip()), "fast-command"
+
+    resolve_capability_id = _after_prefix(original, ("eva capability resolve ",))
+    if resolve_capability_id:
+        from ..capabilities.resource_mapping import format_capability_resolution
+
+        return format_capability_resolution(resolve_capability_id.strip()), "fast-command"
+
+    capability_resources_id = _after_prefix(original, ("eva capability resources ",))
+    if capability_resources_id:
+        from ..capabilities.resource_mapping import format_capability_resources
+
+        return format_capability_resources(capability_resources_id.strip()), "fast-command"
+
+    resource_capabilities_id = _after_prefix(original, ("eva resource capabilities ",))
+    if resource_capabilities_id:
+        from ..capabilities.resource_mapping import format_resource_capabilities
+
+        return format_resource_capabilities(resource_capabilities_id.strip()), "fast-command"
 
     capability_id = _after_prefix(original, ("eva capability ",))
     if capability_id:
