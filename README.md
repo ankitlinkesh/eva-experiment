@@ -1,53 +1,64 @@
 # Eva Agent
 
-Eva is a local desktop-assistant project with a Python/FastAPI backend, browser UI, bounded agent planning, local memory/research stores, provider diagnostics, and public-safe demo tooling.
+Eva is a source-available, local-first desktop AI agent foundation built with Python, FastAPI, and a browser-based command center. It combines deterministic commands, bounded planning, capability metadata, local memory foundations, and explicit safety gates.
 
-Eva uses local data/control where possible, but LLM reasoning may use API-backed providers when configured.
+Eva is not presented as an unrestricted autonomous operator. The public demo is designed to show what is implemented, what remains locked, and which evidence should be refreshed before a release decision.
 
 ## What Is Eva?
 
-- A modular assistant for local laptop workflows.
-- A bounded agent with plan, permission, observe, verify, and stop/repair concepts.
-- A local Research Memory system for saved notes, lexical retrieval, tags, exports, quality checks, and demo imports.
-- A public/community demo surface that shows capabilities without executing risky actions.
+- A modular foundation for local laptop-assistant workflows.
+- A deterministic command system with human-readable status and refusal paths.
+- A bounded planner and agent loop with stop, verification, and risk-review concepts.
+- A capability registry with permission, resource, schema, and verifier metadata.
+- A local/mock-first architecture for demonstrating future browser, desktop, voice, coding, and research workflows safely.
 
-## Public/Community Mode
+## Current Verified Status
 
-Public/community mode is meant for source-available demos and review. It exposes status, simulated workflows, safety checks, resource registry views, and setup diagnostics.
+The repository contains the Phase 29 Public Demo / Release profile. It is report/status/documentation only and is considered ready for local demo review only after the focused, quick, and full verifier commands below pass in the current checkout.
 
-Useful commands:
+No publication, upload, package release, installer creation, commit, tag, or push is performed by Phase 29.
+
+## Capabilities
+
+- FileAgent inspection, drafts, approval metadata, and sandbox previews.
+- Phase 12L narrow approved creation of one new `.md` or `.txt` file under `docs/` or `samples/`.
+- Bounded planner, agent-loop, workflow, context, threat-defense, and memory previews.
+- Browser public-URL read-only observation reports; browser control remains locked.
+- One-shot redacted desktop observation reports; desktop control remains locked.
+- Desktop-control policy and dry-run gate reports without real control.
+- News/Web Intelligence local/mock or safe-read-only reports.
+- CodingAgent classification, patch-plan, review, test-plan, risk, and handoff previews without source editing.
+- Voice Assistant locked/mock foundation without microphone or audio execution.
+
+## Demo Commands
 
 ```text
 eva release status
+eva release demo
+eva release commands
+eva release capability map
+eva release safety proof
+eva release readiness
+eva release limitations
+eva release verification
+```
+
+These commands return deterministic local text. They do not publish, execute tools, inspect private sessions, or unlock restricted features.
+
+Additional established safety demonstrations remain available:
+
+```text
 eva public checklist
 eva public hardening status
 eva demo scenarios
 eva demo run whatsapp-confirmation
 eva safety test read .env.local
 eva doctor public
-research memory import demo
 ```
 
-Demo mode does not send messages, delete files, run MCP tools, control the desktop, run Playwright, or read private browser/session data.
-
-## Safety Model
-
-- No arbitrary shell path by default.
-- No camera.
-- No always-on screen watching.
-- Power actions require confirmation.
-- Message sending requires confirmation and remains unavailable in public demo mode.
-- Destructive file actions require override and remain unavailable in public demo mode.
-- MCP, Playwright, and PyAutoGUI execution remain disabled unless a later gated private phase explicitly enables them.
-- Private browser, email, chat, cookie, token, localStorage, sessionStorage, and password reads are refused.
-
-## Research Memory
-
-Research Memory stores sanitized local notes in runtime storage. It supports status, recent items, topics, search, retrieval, import/export, tags, duplicate previews, quality warnings, vector-readiness status, and fake public demo notes.
-
-Vector search is prepared but disabled by default. Chroma/Qdrant and cloud embedding/summarization paths are not active in this public phase.
-
 ## Run Locally
+
+From the repository root:
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn backend.eva.main:app --host 0.0.0.0 --port 8765
@@ -59,22 +70,64 @@ Then open:
 http://127.0.0.1:8765
 ```
 
-Create private settings by copying `.env.example` to `.env.local`, then fill in only the providers you use. Never commit `.env.local`.
+Private settings can be created from `.env.example`. Never commit or display private environment files.
 
-## Public Release Readiness
+## Verification
 
-Before publishing:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\verify_eva_public_release_hardening.py
-```
-
-Also run:
+Run the Phase 29 verifier:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\verify_eva_public_release.py
-.\.venv\Scripts\python.exe scripts\verify_eva_stabilization_v1.py
+.\.venv\Scripts\python.exe scripts\verify_eva_public_demo_release.py
 ```
+
+Run both master profiles:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\verify_eva_all.py --quick --timeout 90
+.\.venv\Scripts\python.exe scripts\verify_eva_all.py --full --timeout 90
+```
+
+Finish with:
+
+```powershell
+git diff --check
+git status --short
+```
+
+These commands provide local evidence only. They do not publish or certify production security.
+
+## Safety Boundaries
+
+- No unrestricted shell or arbitrary command execution.
+- No browser clicking, typing, login, upload, download, cookie, profile, or session control.
+- No desktop clicking, typing, hotkeys, clipboard, app/window control, or continuous monitoring.
+- No unrestricted crawler.
+- No CodingAgent source editing or patch application.
+- No public-demo live LLM/API/provider call.
+- No cloud or MCP execution.
+- No microphone, audio recording, playback, ASR, or TTS execution in the voice foundation.
+- No secret, configuration, session, raw memory database, or private WorkSession dump exposure.
+- No broad filesystem mutation.
+- Phase 12L narrow approved text-file creation remains the only real write path.
+
+## Known Limitations
+
+- The public demo is a local report/status profile, not a hosted service.
+- Browser and desktop backends may report unavailable while preserving safe mock/status behavior.
+- News is local/mock or safe-read-only; it is not unrestricted web crawling.
+- CodingAgent creates plans and reviews only.
+- Voice remains a locked/mock foundation.
+- Verification evidence is checkout-specific and must be refreshed before release review.
+- Phase 29 does not create a release candidate, commit, tag, installer, package, or upload.
+
+## Non-Goals
+
+- Unrestricted autonomy or self-modifying code.
+- Silent background monitoring.
+- Production-security certification.
+- Automatic publication or deployment.
+- Automatic messaging, purchasing, submitting, or destructive file actions.
+- Claims that locked or preview-only features are real execution capabilities.
 
 ## License
 

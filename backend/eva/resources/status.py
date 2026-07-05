@@ -26,7 +26,7 @@ def format_resource_registry_status() -> str:
             "MCP tools are cataloged but disabled by default.",
             "Browser/desktop automation requires permission.",
             "Send/delete/system-changing tools require confirmation or override.",
-            "The registry does not install packages, run servers, call the network, or read secrets.",
+            "The registry does not perform dependency setup, run servers, call the network, or read secrets.",
         ]
     )
 
@@ -65,7 +65,7 @@ def format_open_source_tools_status() -> str:
             f"Cataloged non-MCP resources: {len(resources)}",
             f"Allowed existing/internal resources: {len(allowed)}",
             f"Experimental external resources: {len(experimental)}",
-            "New external packages are not installed or enabled by this registry.",
+            "New external dependencies are not installed or enabled by this registry.",
             "Desktop/browser automation adapters remain disabled unless explicitly configured and tested.",
             "",
             "Experimental: " + (", ".join(experimental) if experimental else "none"),

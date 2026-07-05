@@ -479,6 +479,44 @@ def _after_prefix(text: str, prefixes: tuple[str, ...]) -> str | None:
     return None
 
 
+def _parse_between(text: str, prefix: str, separator: str) -> tuple[str, str] | None:
+    if not text.startswith(prefix):
+        return None
+    payload = text[len(prefix):]
+    index = payload.find(separator)
+    if index <= 0:
+        return None
+    left = payload[:index].strip()
+    right = payload[index + len(separator):].strip()
+    if not left or not right:
+        return None
+    return left, right
+
+
+def _parse_replace_draft(text: str) -> tuple[str, str, str] | None:
+    return _parse_replace_with_prefix(text, "eva file draft replace ")
+
+
+def _parse_replace_with_prefix(text: str, prefix: str) -> tuple[str, str, str] | None:
+    old_marker = " old "
+    new_marker = " new "
+    if not text.startswith(prefix):
+        return None
+    payload = text[len(prefix):]
+    old_index = payload.find(old_marker)
+    if old_index <= 0:
+        return None
+    new_index = payload.find(new_marker, old_index + len(old_marker))
+    if new_index <= old_index:
+        return None
+    path_text = payload[:old_index].strip()
+    old_text = payload[old_index + len(old_marker):new_index].strip()
+    new_text = payload[new_index + len(new_marker):].strip()
+    if not path_text or not old_text or not new_text:
+        return None
+    return path_text, old_text, new_text
+
+
 def _format_web_search_result(result: object) -> str:
     if not isinstance(result, dict):
         return str(result)
@@ -965,6 +1003,1238 @@ def _set_llm_mode_reply(mode: str) -> str:
     return labels[selected] + extra
 
 
+def _handle_eva_ask_command(
+    normalized: str,
+    original: str,
+    tools: ToolRegistry,
+    session_context: dict | None,
+    memory: object | None,
+    session_id: str | None,
+) -> tuple[str, str] | None:
+    request = _after_prefix(original, ("eva ask ",))
+    if not request:
+        return None
+    from ..authority.formatter import format_authority_decision
+    from ..core.natural_router import NaturalRouteResult, route_natural_request
+
+    route = route_natural_request(request)
+    decision = _authority_decision_from_natural_route(route)
+    if route.intent == "project_inspect":
+        from ..skills.project_inspection import format_project_inspection
+
+        return _format_eva_ask_response(route, decision, format_project_inspection()), "fast-command"
+    if route.intent == "project_recent_changes":
+        from ..skills.project_inspection import format_recent_project_changes
+
+        return _format_eva_ask_response(route, decision, format_recent_project_changes()), "fast-command"
+    if route.intent == "project_next_step":
+        from ..skills.project_inspection import format_project_next_step
+
+        return _format_eva_ask_response(route, decision, format_project_next_step()), "fast-command"
+    if route.intent == "project_proof":
+        from ..skills.reality_check import format_project_proof
+
+        return _format_eva_ask_response(route, decision, format_project_proof()), "fast-command"
+    if route.intent == "done_check":
+        from ..skills.reality_check import format_done_check
+
+        return _format_eva_ask_response(route, decision, format_done_check()), "fast-command"
+    if route.intent == "project_broken_status":
+        from ..skills.reality_check import format_broken_status
+
+        return _format_eva_ask_response(route, decision, format_broken_status()), "fast-command"
+    if route.intent in {"control_center_status", "locked_features", "enabled_features", "next_safe_step"}:
+        if route.intent == "locked_features":
+            from ..ai_os.formatter import format_ai_os_locked_features
+
+            return _format_ai_os_ask_response(route, format_ai_os_locked_features()), "fast-command"
+        if route.intent == "next_safe_step":
+            from ..ai_os.formatter import format_ai_os_next_safe_step
+
+            return _format_ai_os_ask_response(route, format_ai_os_next_safe_step()), "fast-command"
+        from ..control_center.status import (
+            format_control_center_summary_text,
+            format_enabled_features_text,
+            format_locked_features_text,
+            format_next_safe_step_text,
+        )
+
+        body_map = {
+            "control_center_status": format_control_center_summary_text,
+            "locked_features": format_locked_features_text,
+            "enabled_features": format_enabled_features_text,
+            "next_safe_step": format_next_safe_step_text,
+        }
+        return _format_eva_ask_response(route, decision, body_map[route.intent]()), "fast-command"
+    if route.intent in {"work_sessions_status", "audit_timeline", "latest_work_session"}:
+        from ..work_sessions.status import format_audit_timeline, format_latest_work_session
+        from ..work_sessions.formatter import format_work_sessions_status
+
+        body_map = {
+            "work_sessions_status": format_work_sessions_status,
+            "audit_timeline": format_audit_timeline,
+            "latest_work_session": format_latest_work_session,
+        }
+        return _format_eva_ask_response(route, decision, body_map[route.intent]()), "fast-command"
+    if route.intent == "golden_workflow_status":
+        from ..golden_workflows.status import format_golden_workflows_text
+
+        return _format_eva_ask_response(route, decision, format_golden_workflows_text()), "fast-command"
+    if route.intent in {"golden_workflow_test_plan", "golden_workflow_proof"}:
+        from ..golden_workflows.status import format_golden_workflow_proof, format_golden_workflow_test_plan
+
+        body = format_golden_workflow_proof() if route.intent == "golden_workflow_proof" else format_golden_workflow_test_plan()
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent in {"workflow_continue", "workflow_next_step"}:
+        from ..skills.workflow_state import classify_next_fileagent_step, format_workflow_next_step
+
+        body = format_workflow_next_step(classify_next_fileagent_step(request))
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent in {"phase12_verify_status", "phase12_status"}:
+        from ..core.ux_messages import format_phase12_status, format_quick_status_summary
+
+        body = format_quick_status_summary() if route.intent == "phase12_verify_status" else format_phase12_status()
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent in {"phase12_ready", "phase12_summary", "phase12_limits", "phase12_proof"}:
+        from ..core.phase12_ready import format_phase12_limits, format_phase12_proof, format_phase12_ready, format_phase12_summary
+
+        body_map = {
+            "phase12_ready": format_phase12_ready,
+            "phase12_summary": format_phase12_summary,
+            "phase12_limits": format_phase12_limits,
+            "phase12_proof": format_phase12_proof,
+        }
+        return _format_eva_ask_response(route, decision, body_map[route.intent]()), "fast-command"
+    if route.intent in {"llm_status", "llm_providers", "llm_routing_policy", "llm_fallback_policy", "llm_limits", "llm_structured_output", "llm_readiness"}:
+        from ..llm.formatter import format_llm_fallback_policy, format_llm_limits, format_llm_providers, format_llm_readiness, format_llm_routing_policy, format_llm_status, format_llm_structured_output
+
+        body_map = {"llm_status": format_llm_status, "llm_providers": format_llm_providers, "llm_routing_policy": format_llm_routing_policy, "llm_fallback_policy": format_llm_fallback_policy, "llm_limits": format_llm_limits, "llm_structured_output": format_llm_structured_output, "llm_readiness": format_llm_readiness}
+        return _format_eva_ask_response(route, decision, body_map[route.intent]()), "fast-command"
+    if route.intent in {"llm_validation_status", "llm_validation_policy", "llm_validation_invalid_examples", "llm_validation_readiness"}:
+        from ..llm.formatter import format_llm_validate_invalid_examples, format_llm_validation_policy, format_llm_validation_readiness, format_llm_validation_status
+
+        body_map = {
+            "llm_validation_status": format_llm_validation_status,
+            "llm_validation_policy": format_llm_validation_policy,
+            "llm_validation_invalid_examples": format_llm_validate_invalid_examples,
+            "llm_validation_readiness": format_llm_validation_readiness,
+        }
+        return _format_llm_validation_ask_response(route, body_map[route.intent]()), "fast-command"
+    if route.intent in {"llm_red_team_status", "llm_red_team_run", "llm_failure_tests", "llm_safety_failure_report", "llm_red_team_readiness"}:
+        from ..llm.formatter import format_llm_failure_tests, format_llm_red_team_readiness, format_llm_red_team_run, format_llm_red_team_status, format_llm_safety_failure_report
+        body_map = {"llm_red_team_status": format_llm_red_team_status, "llm_red_team_run": format_llm_red_team_run, "llm_failure_tests": format_llm_failure_tests, "llm_safety_failure_report": format_llm_safety_failure_report, "llm_red_team_readiness": format_llm_red_team_readiness}
+        return _format_llm_validation_ask_response(route, body_map[route.intent]()), "fast-command"
+    if route.intent in {"context_status", "context_policy", "context_budget", "context_assemble_preview", "context_grounding_report", "context_redaction_policy", "context_readiness"}:
+        from ..context_engine.formatter import format_context_assemble_preview, format_context_budget, format_context_grounding_report, format_context_policy, format_context_readiness, format_context_redaction_policy, format_context_status
+        body_map = {
+            "context_status": format_context_status,
+            "context_policy": format_context_policy,
+            "context_budget": format_context_budget,
+            "context_assemble_preview": format_context_assemble_preview,
+            "context_grounding_report": format_context_grounding_report,
+            "context_redaction_policy": format_context_redaction_policy,
+            "context_readiness": format_context_readiness,
+        }
+        return _format_context_ask_response(route, body_map[route.intent]()), "fast-command"
+    if route.intent in {"threat_status", "threat_policy", "threat_scan_preview", "threat_exfiltration_examples", "threat_context_guard", "threat_readiness"}:
+        from ..threat_defense.formatter import format_threat_context_guard, format_threat_exfiltration_examples, format_threat_policy, format_threat_readiness, format_threat_scan_preview, format_threat_status
+        body_map = {
+            "threat_status": format_threat_status,
+            "threat_policy": format_threat_policy,
+            "threat_scan_preview": format_threat_scan_preview,
+            "threat_exfiltration_examples": format_threat_exfiltration_examples,
+            "threat_context_guard": format_threat_context_guard,
+            "threat_readiness": format_threat_readiness,
+        }
+        return _format_threat_ask_response(route, body_map[route.intent]()), "fast-command"
+    if route.intent in {"agent_loop_status", "agent_loop_policy", "agent_loop_run_preview", "agent_loop_safety_report", "agent_loop_stop_reasons", "agent_loop_action_previews", "agent_loop_readiness"}:
+        from ..agent_loop.formatter import format_agent_loop_action_previews, format_agent_loop_policy, format_agent_loop_readiness, format_agent_loop_run_preview, format_agent_loop_safety_report, format_agent_loop_status, format_agent_loop_stop_reasons
+        body_map = {
+            "agent_loop_status": format_agent_loop_status,
+            "agent_loop_policy": format_agent_loop_policy,
+            "agent_loop_run_preview": format_agent_loop_run_preview,
+            "agent_loop_safety_report": format_agent_loop_safety_report,
+            "agent_loop_stop_reasons": format_agent_loop_stop_reasons,
+            "agent_loop_action_previews": format_agent_loop_action_previews,
+            "agent_loop_readiness": format_agent_loop_readiness,
+        }
+        return _format_agent_loop_ask_response(route, body_map[route.intent]()), "fast-command"
+    if route.intent in {"workflow_planner_status", "workflow_planner_policy", "workflow_planner_preview", "workflow_planner_dependencies", "workflow_planner_approvals", "workflow_planner_rollback", "workflow_planner_readiness"}:
+        from ..workflow_planner.formatter import format_workflow_planner_approvals, format_workflow_planner_dependencies, format_workflow_planner_policy, format_workflow_planner_preview, format_workflow_planner_readiness, format_workflow_planner_rollback, format_workflow_planner_status
+        body_map = {
+            "workflow_planner_status": format_workflow_planner_status,
+            "workflow_planner_policy": format_workflow_planner_policy,
+            "workflow_planner_preview": format_workflow_planner_preview,
+            "workflow_planner_dependencies": format_workflow_planner_dependencies,
+            "workflow_planner_approvals": format_workflow_planner_approvals,
+            "workflow_planner_rollback": format_workflow_planner_rollback,
+            "workflow_planner_readiness": format_workflow_planner_readiness,
+        }
+        return _format_workflow_planner_ask_response(route, body_map[route.intent]()), "fast-command"
+    if route.intent in {"execution_gates_status", "execution_gates_policy", "execution_gates_blocked_actions", "execution_gates_approvals", "execution_gates_confirmations", "execution_gates_readiness"}:
+        from ..execution_gates.formatter import (
+            format_execution_gate_approvals,
+            format_execution_gate_blocked_actions,
+            format_execution_gate_confirmations,
+            format_execution_gate_policy,
+            format_execution_gate_readiness,
+            format_execution_gate_status,
+        )
+
+        body_map = {
+            "execution_gates_status": format_execution_gate_status,
+            "execution_gates_policy": format_execution_gate_policy,
+            "execution_gates_blocked_actions": format_execution_gate_blocked_actions,
+            "execution_gates_approvals": format_execution_gate_approvals,
+            "execution_gates_confirmations": format_execution_gate_confirmations,
+            "execution_gates_readiness": format_execution_gate_readiness,
+        }
+        return _format_execution_gates_ask_response(route, body_map[route.intent]()), "fast-command"
+    if route.intent in {"ai_os_status", "ai_os_dashboard", "ai_os_system_map", "ai_os_capability_matrix", "ai_os_locked_features", "ai_os_next_safe_step", "ai_os_safety_boundaries", "ai_os_readiness"}:
+        from ..ai_os.formatter import (
+            format_ai_os_capability_matrix,
+            format_ai_os_dashboard,
+            format_ai_os_locked_features,
+            format_ai_os_next_safe_step,
+            format_ai_os_readiness,
+            format_ai_os_safety_boundaries,
+            format_ai_os_status,
+            format_ai_os_system_map,
+        )
+
+        body_map = {
+            "ai_os_status": format_ai_os_status,
+            "ai_os_dashboard": format_ai_os_dashboard,
+            "ai_os_system_map": format_ai_os_system_map,
+            "ai_os_capability_matrix": format_ai_os_capability_matrix,
+            "ai_os_locked_features": format_ai_os_locked_features,
+            "ai_os_next_safe_step": format_ai_os_next_safe_step,
+            "ai_os_safety_boundaries": format_ai_os_safety_boundaries,
+            "ai_os_readiness": format_ai_os_readiness,
+        }
+        return _format_ai_os_ask_response(route, body_map[route.intent]()), "fast-command"
+    if route.intent in {"voice_status", "voice_policy", "voice_providers", "voice_listen_state", "voice_transcript_safety", "voice_confirmations", "voice_readiness"}:
+        from ..voice_assistant.formatter import (
+            format_voice_confirmations,
+            format_voice_listen_state,
+            format_voice_policy,
+            format_voice_providers,
+            format_voice_readiness,
+            format_voice_status,
+            format_voice_transcript_safety,
+        )
+
+        body_map = {
+            "voice_status": format_voice_status,
+            "voice_policy": format_voice_policy,
+            "voice_providers": format_voice_providers,
+            "voice_listen_state": format_voice_listen_state,
+            "voice_transcript_safety": format_voice_transcript_safety,
+            "voice_confirmations": format_voice_confirmations,
+            "voice_readiness": format_voice_readiness,
+        }
+        return _format_voice_ask_response(route, body_map[route.intent]()), "fast-command"
+    if route.intent in {"memory_v3_status", "memory_v3_policy", "memory_v3_privacy", "memory_v3_freshness", "memory_v3_conflicts", "memory_v3_retrieval_preview", "memory_v3_readiness"}:
+        from ..memory_v3.formatter import (
+            format_memory_v3_conflicts,
+            format_memory_v3_freshness,
+            format_memory_v3_policy,
+            format_memory_v3_privacy,
+            format_memory_v3_readiness,
+            format_memory_v3_retrieval_preview,
+            format_memory_v3_status,
+        )
+
+        body_map = {
+            "memory_v3_status": format_memory_v3_status,
+            "memory_v3_policy": format_memory_v3_policy,
+            "memory_v3_privacy": format_memory_v3_privacy,
+            "memory_v3_freshness": format_memory_v3_freshness,
+            "memory_v3_conflicts": format_memory_v3_conflicts,
+            "memory_v3_retrieval_preview": format_memory_v3_retrieval_preview,
+            "memory_v3_readiness": format_memory_v3_readiness,
+        }
+        return _format_memory_v3_ask_response(route, body_map[route.intent]()), "fast-command"
+    if route.intent in {
+        "browser_read_status",
+        "browser_read_policy",
+        "browser_read_boundaries",
+        "browser_read_observe",
+        "browser_read_session_boundary",
+        "browser_read_blocked_urls",
+        "browser_read_readiness",
+    }:
+        from ..browser_readonly.formatter import (
+            format_browser_read_blocked_urls,
+            format_browser_read_observe,
+            format_browser_read_policy,
+            format_browser_read_readiness,
+            format_browser_read_status,
+        )
+
+        body_map = {
+            "browser_read_status": format_browser_read_status,
+            "browser_read_policy": format_browser_read_policy,
+            "browser_read_boundaries": format_browser_read_policy,
+            "browser_read_observe": format_browser_read_observe,
+            "browser_read_session_boundary": format_browser_read_policy,
+            "browser_read_blocked_urls": format_browser_read_blocked_urls,
+            "browser_read_readiness": format_browser_read_readiness,
+        }
+        return _format_browser_read_ask_response(route, body_map[route.intent]()), "fast-command"
+    if route.intent in {
+        "news_status", "news_policy", "news_dashboard", "news_sources", "news_freshness", "news_readiness",
+    }:
+        from ..news_dashboard.formatter import format_news_dashboard, format_news_freshness, format_news_policy, format_news_readiness, format_news_sources, format_news_status
+        body = {"news_status":format_news_status,"news_policy":format_news_policy,"news_dashboard":format_news_dashboard,"news_sources":format_news_sources,"news_freshness":format_news_freshness,"news_readiness":format_news_readiness}[route.intent]()
+        return "Eva ask\n\n" + body, "fast-command"
+    if route.intent in {
+        "coding_status",
+        "coding_policy",
+        "coding_patch_plan",
+        "coding_review_checklist",
+        "coding_test_plan",
+        "coding_risk_review",
+        "coding_handoff",
+        "coding_readiness",
+    }:
+        from ..coding_agent.formatter import (
+            format_coding_handoff,
+            format_coding_patch_plan,
+            format_coding_policy,
+            format_coding_readiness,
+            format_coding_review_checklist,
+            format_coding_risk_review,
+            format_coding_status,
+            format_coding_test_plan,
+        )
+
+        body_map = {
+            "coding_status": format_coding_status,
+            "coding_policy": format_coding_policy,
+            "coding_patch_plan": format_coding_patch_plan,
+            "coding_review_checklist": format_coding_review_checklist,
+            "coding_test_plan": format_coding_test_plan,
+            "coding_risk_review": format_coding_risk_review,
+            "coding_handoff": format_coding_handoff,
+            "coding_readiness": format_coding_readiness,
+        }
+        return "Eva ask\n\n" + body_map[route.intent](), "fast-command"
+    if route.intent in {
+        "release_status",
+        "release_demo",
+        "release_commands",
+        "release_capability_map",
+        "release_safety_proof",
+        "release_readiness",
+        "release_limitations",
+    }:
+        from ..release_demo.formatter import (
+            format_release_capability_map,
+            format_release_commands,
+            format_release_demo,
+            format_release_limitations,
+            format_release_readiness,
+            format_release_safety_proof,
+            format_release_status,
+        )
+
+        body_map = {
+            "release_status": format_release_status,
+            "release_demo": format_release_demo,
+            "release_commands": format_release_commands,
+            "release_capability_map": format_release_capability_map,
+            "release_safety_proof": format_release_safety_proof,
+            "release_readiness": format_release_readiness,
+            "release_limitations": format_release_limitations,
+        }
+        return "Eva ask\n\n" + body_map[route.intent](), "fast-command"
+    if route.intent in {
+        "desktop_control_status",
+        "desktop_control_policy",
+        "desktop_control_dry_run",
+        "desktop_control_approvals",
+        "desktop_control_blocked_actions",
+        "desktop_control_readiness",
+    }:
+        from ..desktop_control_gate.formatter import (
+            format_desktop_control_approvals,
+            format_desktop_control_blocked_actions,
+            format_desktop_control_dry_run,
+            format_desktop_control_policy,
+            format_desktop_control_readiness,
+            format_desktop_control_status,
+        )
+
+        body_map = {
+            "desktop_control_status": format_desktop_control_status,
+            "desktop_control_policy": format_desktop_control_policy,
+            "desktop_control_dry_run": format_desktop_control_dry_run,
+            "desktop_control_approvals": format_desktop_control_approvals,
+            "desktop_control_blocked_actions": format_desktop_control_blocked_actions,
+            "desktop_control_readiness": format_desktop_control_readiness,
+        }
+        return "Eva ask\n\n" + body_map[route.intent](), "fast-command"
+    if route.intent in {
+        "desktop_observe_status",
+        "desktop_observe_policy",
+        "desktop_observe_boundaries",
+        "desktop_observe_sensitive_screens",
+        "desktop_observe_mock",
+        "desktop_observe_readiness",
+    }:
+        from ..desktop_observation.formatter import (
+            format_desktop_observe_mock,
+            format_desktop_observe_policy,
+            format_desktop_observe_readiness,
+            format_desktop_observe_sensitive_screens,
+            format_desktop_observe_status,
+        )
+
+        body_map = {
+            "desktop_observe_status": format_desktop_observe_status,
+            "desktop_observe_policy": format_desktop_observe_policy,
+            "desktop_observe_boundaries": format_desktop_observe_policy,
+            "desktop_observe_sensitive_screens": format_desktop_observe_sensitive_screens,
+            "desktop_observe_mock": format_desktop_observe_mock,
+            "desktop_observe_readiness": format_desktop_observe_readiness,
+        }
+        return _format_desktop_observe_ask_response(route, body_map[route.intent]()), "fast-command"
+    if route.intent in {"desktop_status", "desktop_policy", "desktop_blocked_actions", "desktop_action_safety", "desktop_app_risk", "desktop_readiness", "desktop_session_status", "desktop_session_preview", "desktop_session_plan", "desktop_window_status_preview", "desktop_active_context_preview", "desktop_observation_readiness", "desktop_screen_policy", "desktop_screen_observation_policy", "desktop_sensitive_screens", "desktop_screen_redaction_policy", "desktop_screen_capture_gate", "desktop_screen_readiness", "desktop_action_dry_run", "desktop_action_plan_preview", "desktop_action_risk", "desktop_action_approvals", "desktop_dry_run_policy", "desktop_action_readiness", "desktop_risk_score", "desktop_risk_factors", "desktop_approval_required", "desktop_safety_matrix", "desktop_high_risk_actions", "desktop_risk_readiness", "desktop_approval_policy", "desktop_approval_levels", "desktop_approval_preview", "desktop_confirmation_phrase", "desktop_forbidden_actions", "desktop_approval_audit_status", "desktop_approval_readiness", "desktop_phase14_status", "desktop_phase14_summary", "desktop_phase14_limits", "desktop_phase14_ready", "desktop_phase14_final_proof", "desktop_readiness_proof", "desktop_locked_status", "desktop_readiness_gaps"}:
+        from ..desktop_agent.formatter import (
+            format_desktop_active_context_preview,
+            format_desktop_approval_audit_status,
+            format_desktop_approval_levels,
+            format_desktop_approval_model_preview,
+            format_desktop_approval_model_readiness,
+            format_desktop_approval_policy,
+            format_desktop_approval_required,
+            format_desktop_action_approvals,
+            format_desktop_action_dry_run,
+            format_desktop_action_plan,
+            format_desktop_action_readiness,
+            format_desktop_action_risk,
+            format_desktop_action_safety,
+            format_desktop_app_risk,
+            format_desktop_blocked_actions,
+            format_desktop_dry_run_policy,
+            format_desktop_observation_readiness,
+            format_desktop_policy,
+            format_desktop_readiness,
+            format_desktop_screen_capture_gate,
+            format_desktop_screen_observation_policy,
+            format_desktop_screen_policy,
+            format_desktop_screen_readiness,
+            format_desktop_screen_redaction_policy,
+            format_desktop_session_plan,
+            format_desktop_session_preview,
+            format_desktop_session_status,
+            format_desktop_sensitive_screens,
+            format_desktop_status,
+            format_desktop_window_status_preview,
+            format_desktop_high_risk_actions,
+            format_desktop_risk_factors,
+            format_desktop_risk_readiness,
+            format_desktop_risk_score,
+            format_desktop_safety_matrix,
+            format_desktop_confirmation_phrase,
+            format_desktop_forbidden_actions,
+            format_desktop_locked_status,
+            format_desktop_phase14_final_proof,
+            format_desktop_phase14_limits,
+            format_desktop_phase14_ready,
+            format_desktop_phase14_status,
+            format_desktop_phase14_summary,
+            format_desktop_readiness_gaps,
+            format_desktop_readiness_proof,
+        )
+
+        if route.intent == "desktop_phase14_status":
+            body = format_desktop_phase14_status()
+        elif route.intent == "desktop_phase14_summary":
+            body = format_desktop_phase14_summary()
+        elif route.intent == "desktop_phase14_limits":
+            body = format_desktop_phase14_limits()
+        elif route.intent == "desktop_phase14_ready":
+            body = format_desktop_phase14_ready()
+        elif route.intent == "desktop_phase14_final_proof":
+            body = format_desktop_phase14_final_proof()
+        elif route.intent == "desktop_readiness_proof":
+            body = format_desktop_readiness_proof()
+        elif route.intent == "desktop_locked_status":
+            body = format_desktop_locked_status()
+        elif route.intent == "desktop_readiness_gaps":
+            body = format_desktop_readiness_gaps()
+        elif route.intent == "desktop_policy":
+            body = format_desktop_policy()
+        elif route.intent == "desktop_blocked_actions":
+            body = format_desktop_blocked_actions()
+        elif route.intent == "desktop_action_safety":
+            body = format_desktop_action_safety(str(route.suggested_command or "").removeprefix("eva desktop action safety ").strip() or "unknown")
+        elif route.intent == "desktop_action_dry_run":
+            body = format_desktop_action_dry_run(request)
+        elif route.intent == "desktop_action_plan_preview":
+            body = format_desktop_action_plan(request)
+        elif route.intent == "desktop_action_risk":
+            body = format_desktop_action_risk(str(route.suggested_command or "").removeprefix("eva desktop action risk ").strip() or "unknown")
+        elif route.intent == "desktop_action_approvals":
+            body = format_desktop_action_approvals()
+        elif route.intent == "desktop_dry_run_policy":
+            body = format_desktop_dry_run_policy()
+        elif route.intent == "desktop_action_readiness":
+            body = format_desktop_action_readiness()
+        elif route.intent == "desktop_risk_score":
+            body = format_desktop_risk_score(request)
+        elif route.intent == "desktop_risk_factors":
+            body = format_desktop_risk_factors(request)
+        elif route.intent == "desktop_approval_required":
+            body = format_desktop_approval_required(request)
+        elif route.intent == "desktop_approval_policy":
+            body = format_desktop_approval_policy()
+        elif route.intent == "desktop_approval_levels":
+            body = format_desktop_approval_levels()
+        elif route.intent == "desktop_approval_preview":
+            body = format_desktop_approval_model_preview(request)
+        elif route.intent == "desktop_confirmation_phrase":
+            body = format_desktop_confirmation_phrase(request)
+        elif route.intent == "desktop_forbidden_actions":
+            body = format_desktop_forbidden_actions()
+        elif route.intent == "desktop_approval_audit_status":
+            body = format_desktop_approval_audit_status()
+        elif route.intent == "desktop_approval_readiness":
+            body = format_desktop_approval_model_readiness()
+        elif route.intent == "desktop_safety_matrix":
+            body = format_desktop_safety_matrix()
+        elif route.intent == "desktop_high_risk_actions":
+            body = format_desktop_high_risk_actions()
+        elif route.intent == "desktop_risk_readiness":
+            body = format_desktop_risk_readiness()
+        elif route.intent == "desktop_app_risk":
+            body = format_desktop_app_risk(str(route.suggested_command or "").removeprefix("eva desktop app risk ").strip() or "unknown")
+        elif route.intent == "desktop_readiness":
+            body = format_desktop_readiness()
+        elif route.intent == "desktop_session_status":
+            body = format_desktop_session_status()
+        elif route.intent == "desktop_session_preview":
+            body = format_desktop_session_preview("Natural desktop session request")
+        elif route.intent == "desktop_session_plan":
+            body = format_desktop_session_plan()
+        elif route.intent == "desktop_window_status_preview":
+            body = format_desktop_window_status_preview()
+        elif route.intent == "desktop_active_context_preview":
+            body = format_desktop_active_context_preview()
+        elif route.intent == "desktop_observation_readiness":
+            body = format_desktop_observation_readiness()
+        elif route.intent == "desktop_screen_policy":
+            body = format_desktop_screen_policy()
+        elif route.intent == "desktop_screen_observation_policy":
+            body = format_desktop_screen_observation_policy()
+        elif route.intent == "desktop_sensitive_screens":
+            body = format_desktop_sensitive_screens()
+        elif route.intent == "desktop_screen_redaction_policy":
+            body = format_desktop_screen_redaction_policy()
+        elif route.intent == "desktop_screen_capture_gate":
+            body = format_desktop_screen_capture_gate()
+        elif route.intent == "desktop_screen_readiness":
+            body = format_desktop_screen_readiness()
+        else:
+            body = format_desktop_status()
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent in {"browser_status", "browser_policy", "browser_action_safety", "browser_session_status", "browser_session_preview", "browser_session_plan", "browser_session_readiness", "browser_page_summary_policy", "browser_page_summary_preview", "browser_dom_summary_policy", "browser_observation_readiness", "browser_action_dry_run", "browser_action_plan_preview", "browser_action_risk", "browser_action_approvals", "browser_dry_run_policy", "browser_domain_check", "browser_site_risk", "browser_sensitive_sites", "browser_domain_rules", "browser_domain_approvals", "browser_readonly_readiness", "browser_readiness_proof", "browser_safety_proof", "browser_readiness_gaps", "browser_locked_status", "browser_phase13_proof", "browser_phase13_status", "browser_phase13_summary", "browser_phase13_limits", "browser_phase13_ready", "browser_phase13_final_proof"}:
+        from ..browser_agent.formatter import (
+            format_browser_action_safety,
+            format_browser_action_approvals,
+            format_browser_action_dry_run,
+            format_browser_action_plan,
+            format_browser_action_risk,
+            format_browser_locked_status,
+            format_browser_domain_approvals,
+            format_browser_domain_check,
+            format_browser_domain_rules,
+            format_browser_dom_summary_policy,
+            format_browser_dry_run_policy,
+            format_browser_observation_readiness,
+            format_browser_page_summary_policy,
+            format_browser_page_summary_preview,
+            format_browser_phase13_final_proof,
+            format_browser_phase13_limits,
+            format_browser_phase13_proof,
+            format_browser_phase13_ready,
+            format_browser_phase13_status,
+            format_browser_phase13_summary,
+            format_browser_policy,
+            format_browser_readiness,
+            format_browser_readiness_gaps,
+            format_browser_readiness_proof,
+            format_browser_read_only_readiness,
+            format_browser_safety_proof,
+            format_browser_session_plan,
+            format_browser_session_preview,
+            format_browser_session_status,
+            format_browser_sensitive_sites,
+            format_browser_site_risk,
+            format_browser_status,
+        )
+
+        if route.intent == "browser_policy":
+            body = format_browser_policy()
+        elif route.intent == "browser_action_safety":
+            action = str(route.suggested_command or "").removeprefix("eva browser action safety ").strip() or request
+            body = format_browser_action_safety(action)
+        elif route.intent == "browser_session_status":
+            body = format_browser_session_status()
+        elif route.intent == "browser_session_preview":
+            body = format_browser_session_preview("Natural browser session request")
+        elif route.intent == "browser_session_plan":
+            body = format_browser_session_plan()
+        elif route.intent == "browser_session_readiness":
+            body = format_browser_readiness()
+        elif route.intent == "browser_page_summary_policy":
+            body = format_browser_page_summary_policy()
+        elif route.intent == "browser_page_summary_preview":
+            body = format_browser_page_summary_preview()
+        elif route.intent == "browser_dom_summary_policy":
+            body = format_browser_dom_summary_policy()
+        elif route.intent == "browser_observation_readiness":
+            body = format_browser_observation_readiness()
+        elif route.intent == "browser_action_dry_run":
+            body = format_browser_action_dry_run(request)
+        elif route.intent == "browser_action_plan_preview":
+            body = format_browser_action_plan(request)
+        elif route.intent == "browser_action_risk":
+            action = str(route.suggested_command or "").removeprefix("eva browser action risk ").strip() or request
+            body = format_browser_action_risk(action)
+        elif route.intent == "browser_action_approvals":
+            body = format_browser_action_approvals()
+        elif route.intent == "browser_dry_run_policy":
+            body = format_browser_dry_run_policy()
+        elif route.intent == "browser_domain_check":
+            domain = str(route.suggested_command or "").removeprefix("eva browser domain check ").strip() or request
+            body = format_browser_domain_check(domain)
+        elif route.intent == "browser_site_risk":
+            domain = str(route.suggested_command or "").removeprefix("eva browser site risk ").strip() or request
+            body = format_browser_site_risk(domain)
+        elif route.intent == "browser_sensitive_sites":
+            body = format_browser_sensitive_sites()
+        elif route.intent == "browser_domain_rules":
+            body = format_browser_domain_rules()
+        elif route.intent == "browser_domain_approvals":
+            body = format_browser_domain_approvals()
+        elif route.intent == "browser_readonly_readiness":
+            body = format_browser_read_only_readiness()
+        elif route.intent == "browser_readiness_proof":
+            body = format_browser_readiness_proof()
+        elif route.intent == "browser_safety_proof":
+            body = format_browser_safety_proof()
+        elif route.intent == "browser_readiness_gaps":
+            body = format_browser_readiness_gaps()
+        elif route.intent == "browser_locked_status":
+            body = format_browser_locked_status()
+        elif route.intent == "browser_phase13_proof":
+            body = format_browser_phase13_proof()
+        elif route.intent == "browser_phase13_status":
+            body = format_browser_phase13_status()
+        elif route.intent == "browser_phase13_summary":
+            body = format_browser_phase13_summary()
+        elif route.intent == "browser_phase13_limits":
+            body = format_browser_phase13_limits()
+        elif route.intent == "browser_phase13_ready":
+            body = format_browser_phase13_ready()
+        elif route.intent == "browser_phase13_final_proof":
+            body = format_browser_phase13_final_proof()
+        else:
+            body = format_browser_status()
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent == "verification_before_completion":
+        from ..core.ux_messages import format_phase12_status
+        from ..skills.workflow_state import format_workflow_state_summary, summarize_fileagent_workflow_state
+
+        body = "\n\n".join(
+            [
+                "Evidence check",
+                "I can summarize the current local verification and workflow evidence, but I should not claim completion without fresh verifier output.",
+                format_phase12_status(),
+                format_workflow_state_summary(summarize_fileagent_workflow_state()),
+                "Remaining limitations: broad file edits, source edits, browser/desktop control, shell execution, MCP, cloud calls, and normal-chat v2 routing remain locked.",
+            ]
+        )
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent == "golden_project_note_create":
+        if _should_show_skill_workflow_plan(request):
+            from ..skills.workflows import format_fileagent_project_note_workflow
+
+            body = format_fileagent_project_note_workflow(request)
+            return _format_eva_ask_response(route, decision, body), "fast-command"
+        from ..golden_workflows.formatter import format_golden_workflow_result
+        from ..golden_workflows.runner import start_safe_project_note_workflow
+
+        body = format_golden_workflow_result(start_safe_project_note_workflow(request))
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent == "golden_workflow_continue":
+        from ..golden_workflows.formatter import format_golden_workflow_result
+        from ..golden_workflows.runner import continue_safe_project_note_workflow
+
+        body = format_golden_workflow_result(continue_safe_project_note_workflow(request))
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent == "capability_status" and route.suggested_command == "eva capabilities safe":
+        from ..capabilities.registry import format_capability_summary
+        from ..authority.status import format_authority_status
+
+        body = "\n\n".join(
+            [
+                "Eva safe actions right now",
+                format_authority_status(),
+                format_capability_summary(safe_only=True),
+            ]
+        )
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent in {"approval_sandbox_apply", "approval_sandbox_verify", "approval_sandbox_rollback"} and not route.suggested_command:
+        resolved = _resolve_single_approved_file_approval(route.intent)
+        if not resolved:
+            body = (
+                "I found no single approved sandbox-eligible FileAgent approval to use.\n"
+                "Run `eva file approvals pending` or specify an approval id like `fap_...`."
+            )
+            return _format_eva_ask_response(route, decision, body), "fast-command"
+        route = NaturalRouteResult(**{**route.as_dict(), "suggested_command": resolved, "routed_to": resolved})
+    if route.intent == "real_create_request" and not route.suggested_command:
+        body = _format_real_create_next_step()
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent == "real_create_request":
+        from ..skills.workflow_state import classify_next_fileagent_step, format_workflow_next_step
+
+        body = format_workflow_next_step(classify_next_fileagent_step(request))
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent == "real_apply_policy":
+        from ..file_agent.real_apply import format_real_apply_policy
+
+        return _format_eva_ask_response(route, decision, format_real_apply_policy()), "fast-command"
+    if route.intent == "real_create_verify_latest":
+        from ..skills.workflow_state import classify_next_fileagent_step, format_workflow_next_step
+
+        body = format_workflow_next_step(classify_next_fileagent_step("verify latest real create"))
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent == "real_create_rollback_latest":
+        from ..skills.workflow_state import classify_next_fileagent_step, format_workflow_next_step
+
+        body = format_workflow_next_step(classify_next_fileagent_step("rollback latest real create"))
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.intent == "real_create_rollback_request" and not route.suggested_command:
+        body = "Specify the approval id and exact phrase: `eva ask confirm rollback real create <approval_id>`."
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    if route.refusal_reason:
+        return _format_eva_ask_response(route, decision, route.refusal_reason), "fast-command"
+    if route.suggested_command:
+        delegated = maybe_handle_fast_command(route.suggested_command, tools, session_context=session_context, memory=memory, session_id=session_id)
+        body = delegated[0] if delegated else f"Suggested safe command: `{route.suggested_command}`"
+        return _format_eva_ask_response(route, decision, body), "fast-command"
+    body = "I understood the request, but I need a more specific safe command before doing anything."
+    return _format_eva_ask_response(route, decision, body), "fast-command"
+
+
+def _authority_decision_from_natural_route(route: object) -> object:
+    from ..authority.decision import (
+        allow_approval_decision,
+        allow_draft_decision,
+        allow_preview_decision,
+        allow_readonly_decision,
+        allow_sandbox_decision,
+        block_real_execution_decision,
+        refuse_authority_decision,
+    )
+
+    category = str(getattr(route, "authority_category", "unknown"))
+    intent = str(getattr(route, "intent", "unknown"))
+    suggested = getattr(route, "suggested_command", None)
+    capability = _capability_for_natural_intent(intent)
+    reason = f"Natural router interpreted this as `{intent}`."
+    if getattr(route, "refusal_reason", None):
+        if category in {"destructive", "external_send", "terminal", "browser_action", "desktop_control", "system_change", "local_write"}:
+            return refuse_authority_decision(action_type=intent, action_category=category, capability_id=capability, reason=reason, blocked_reason=str(getattr(route, "refusal_reason")))
+        return block_real_execution_decision(action_type=intent, action_category=category, capability_id=capability, reason=reason, blocked_reason=str(getattr(route, "refusal_reason")))
+    if category == "read":
+        return allow_readonly_decision(action_type=intent, action_category="read", capability_id=capability, agent_name=_agent_for_capability(capability), reason=reason)
+    if category == "draft":
+        return allow_draft_decision(action_type=intent, action_category="draft", capability_id=capability, agent_name="FileAgent", reason=reason)
+    if category == "golden_workflow":
+        return allow_sandbox_decision(action_type=intent, action_category="golden_workflow", capability_id=capability, agent_name="FileAgent", reason=reason, requires_approval=True, public_mode_allowed=False)
+    if category == "approve":
+        return allow_approval_decision(action_type=intent, action_category="approve", capability_id=capability, agent_name="FileAgent", reason=reason, public_mode_allowed=False)
+    if category in {"sandbox_apply", "verify", "rollback"}:
+        return allow_sandbox_decision(action_type=intent, action_category=category, capability_id=capability, agent_name="FileAgent", reason=reason, requires_approval=True, public_mode_allowed=False)
+    if category == "real_create_safe_text":
+        return block_real_execution_decision(action_type=intent, action_category="local_write", capability_id=capability, agent_name="FileAgent", reason=reason, blocked_reason="Exact approval confirmation is required before narrow real create-new-text-file.", public_mode_allowed=False, risk_level="high")
+    if category == "rollback_real_create":
+        return block_real_execution_decision(action_type=intent, action_category="local_write", capability_id=capability, agent_name="FileAgent", reason=reason, blocked_reason="Exact rollback confirmation is required before removing an Eva-created file.", public_mode_allowed=False, risk_level="medium")
+    if suggested:
+        return allow_preview_decision(action_type=intent, action_category="plan", capability_id=capability, reason=reason)
+    return refuse_authority_decision(action_type=intent, action_category="unknown", capability_id=capability, reason=reason, blocked_reason="No safe route was selected.")
+
+
+def _capability_for_natural_intent(intent: str) -> str | None:
+    mapping = {
+        "project_inspect": "eva.project_inspect",
+        "project_recent_changes": "eva.project_recent_changes",
+        "project_next_step": "eva.project_next_step",
+        "project_proof": "eva.project_proof",
+        "done_check": "eva.done_check",
+        "project_broken_status": "eva.project_reality_check",
+        "control_center_status": "eva.control_center_status",
+        "work_sessions_status": "eva.work_sessions_status",
+        "audit_timeline": "eva.audit_timeline",
+        "latest_work_session": "eva.latest_work_session",
+        "locked_features": "eva.locked_features",
+        "enabled_features": "eva.enabled_features",
+        "next_safe_step": "eva.next_safe_step",
+        "file_inspect": "file.preview_text",
+        "file_understand": "file.understand_text",
+        "file_draft": "file.draft_readme_section",
+        "file_apply_readiness": "file.apply_readiness",
+        "approval_status": "file.approval_status",
+        "approval_pending": "file.approval_list_pending",
+        "approval_request": "file.approval_request_create",
+        "approval_sandbox_apply": "file.sandbox_apply_approved",
+        "approval_sandbox_verify": "file.sandbox_verify_apply",
+        "approval_sandbox_rollback": "file.sandbox_rollback_apply",
+        "capability_status": "eva.ask",
+        "agent_status": "eva.ask",
+        "planner_status": "eva.ask",
+        "research_memory_status": "research_memory.status",
+        "safety_status": "eva.authority_status",
+        "control_center_dashboard": "eva.control_center_status",
+        "golden_workflow_status": "eva.golden_workflows_status",
+        "golden_workflow_test_plan": "eva.golden_workflow_test_plan",
+        "golden_workflow_proof": "eva.golden_workflow_proof",
+        "golden_project_note_create": "eva.golden_workflow_project_note",
+        "golden_workflow_continue": "eva.golden_workflow_continue",
+        "workflow_continue": "eva.workflow_next_step",
+        "workflow_next_step": "eva.workflow_next_step",
+        "phase12_verify_status": "eva.smoke_status",
+        "phase12_status": "eva.phase12_status",
+        "phase12_ready": "eva.phase12_ready",
+        "phase12_summary": "eva.phase12_summary",
+        "phase12_limits": "eva.phase12_limits",
+        "phase12_proof": "eva.phase12_proof",
+        "browser_read_status": "browser_read.status",
+        "browser_read_policy": "browser_read.policy",
+        "browser_read_boundaries": "browser_read.policy",
+        "browser_read_observe": "browser_read.observe",
+        "browser_read_session_boundary": "browser_read.policy",
+        "browser_read_blocked_urls": "browser_read.blocked_urls",
+        "browser_read_readiness": "browser_read.readiness",
+        "desktop_observe_status": "desktop_observe.status",
+        "desktop_observe_policy": "desktop_observe.policy",
+        "desktop_observe_boundaries": "desktop_observe.policy",
+        "desktop_observe_sensitive_screens": "desktop_observe.sensitive_screens",
+        "desktop_observe_mock": "desktop_observe.mock",
+        "desktop_observe_readiness": "desktop_observe.readiness",
+        "desktop_control_status": "desktop_control.status",
+        "desktop_control_policy": "desktop_control.policy",
+        "desktop_control_dry_run": "desktop_control.dry_run",
+        "desktop_control_approvals": "desktop_control.approvals",
+        "desktop_control_blocked_actions": "desktop_control.blocked_actions",
+        "desktop_control_readiness": "desktop_control.readiness",
+        "news_status": "news.status", "news_policy": "news.policy", "news_dashboard": "news.dashboard",
+        "news_sources": "news.sources", "news_freshness": "news.freshness", "news_readiness": "news.readiness",
+        "coding_status": "coding.status",
+        "coding_policy": "coding.policy",
+        "coding_patch_plan": "coding.patch_plan",
+        "coding_review_checklist": "coding.review_checklist",
+        "coding_test_plan": "coding.test_plan",
+        "coding_risk_review": "coding.risk_review",
+        "coding_handoff": "coding.handoff",
+        "coding_readiness": "coding.readiness",
+        "release_status": "release.status",
+        "release_demo": "release.demo",
+        "release_commands": "release.commands",
+        "release_capability_map": "release.capability_map",
+        "release_safety_proof": "release.safety_proof",
+        "release_readiness": "release.readiness",
+        "release_limitations": "release.limitations",
+        "verification_before_completion": "eva.workflow_plan",
+        "real_apply_policy": "file.real_apply_policy",
+        "real_create_request": "file.real_create_new_text_file",
+        "real_create_confirm": "file.real_create_new_text_file",
+        "real_create_verify": "file.real_verify_new_text_file",
+        "real_create_verify_latest": "eva.file_latest_status",
+        "real_create_rollback_request": "file.real_rollback_new_text_file",
+        "real_create_rollback_latest": "eva.file_latest_status",
+        "real_create_rollback_confirm": "file.real_rollback_new_text_file",
+    }
+    return mapping.get(intent)
+
+
+def _agent_for_capability(capability_id: str | None) -> str | None:
+    if not capability_id:
+        return None
+    if capability_id.startswith("file."):
+        return "FileAgent"
+    if capability_id.startswith("research_memory."):
+        return "ResearchAgent"
+    return "PlannerAgent"
+
+
+def _format_eva_ask_response(route: object, decision: object, body: str) -> str:
+    from ..authority.formatter import format_authority_decision
+    from ..core.ux_messages import format_safe_next_step, format_understood_request
+    from ..skills.selector import select_skills_for_request, select_workflow_for_request
+    from ..specialists.selector import select_specialists_for_request
+
+    intent = str(getattr(route, "intent", "unknown"))
+    mode = str(getattr(decision, "mode", "preview"))
+    allowed = bool(getattr(decision, "allowed", False))
+    sandbox_only = bool(getattr(decision, "sandbox_only", False))
+    request_text = str(getattr(route, "original_text", ""))
+    specialists = select_specialists_for_request(request_text)
+    skills = select_skills_for_request(request_text)
+    workflow = select_workflow_for_request(request_text)
+    if not allowed:
+        next_step = "Use a safe read-only status, preview, or exact confirmation command. Nothing was executed."
+    elif sandbox_only:
+        next_step = "Review the sandbox or approval output before any exact confirmation step."
+    elif mode in {"read_only", "preview_only", "draft_only", "approval_only"}:
+        next_step = "Review the result below. No real file, browser, desktop, shell, or external action was executed."
+    else:
+        next_step = "Review the result below before taking any manual action."
+    work_session_id = ""
+    try:
+        from ..work_sessions.timeline import finalize_work_session, record_eva_ask_work_session
+
+        work_session_id = record_eva_ask_work_session(
+            request_text=request_text,
+            route=route,
+            decision=decision,
+            specialists=specialists,
+            skills=skills,
+            workflow=workflow,
+            next_safe_step=next_step,
+        )
+        finalize_work_session(work_session_id, body)
+    except Exception:
+        work_session_id = "unavailable"
+    return "\n".join(
+        [
+            "Eva ask",
+            "",
+            format_understood_request(intent, f"Intent `{intent}` routed to `{getattr(route, 'routed_to', 'authority_preview')}`."),
+            "",
+            f"Work session: {work_session_id}",
+            f"Request: {getattr(route, 'original_text', '')}",
+            f"Interpreted intent: {getattr(route, 'intent', 'unknown')}",
+            f"Confidence: {float(getattr(route, 'confidence', 0.0)):.2f}",
+            "",
+            format_authority_decision(decision),
+            "",
+            "Specialist route:",
+            ", ".join(item.id for item in specialists[:4]) if specialists else "none",
+            "Skill route:",
+            ", ".join(item.id for item in skills[:4]) if skills else "none",
+            "Workflow route:",
+            workflow.id if workflow else "none",
+            "",
+            format_safe_next_step(next_step),
+            "",
+            "Result:",
+            body,
+        ]
+    )
+
+
+def _format_llm_validation_ask_response(route: object, body: str) -> str:
+    """Render local validation status without creating a work-session record."""
+    return "\n".join(
+        [
+            "Eva ask",
+            "",
+            "Request: structured-output validation status.",
+            f"Interpreted intent: {getattr(route, 'intent', 'unknown')}",
+            "Mode: read-only local validation status.",
+            "No work session was recorded and no action was executed.",
+            "",
+            "Result:",
+            body,
+        ]
+    )
+
+
+def _format_context_ask_response(route: object, body: str) -> str:
+    """Render local context assembly status without creating a work-session record."""
+    return "\n".join(
+        [
+            "Eva ask",
+            "",
+            "Request: context assembly status/policy/preview.",
+            f"Interpreted intent: {getattr(route, 'intent', 'unknown')}",
+            "Mode: read-only local/mock context preview.",
+            "No work session was recorded and no action was executed.",
+            "No live LLM call was made.",
+            "Assembled context cannot execute tools.",
+            "",
+            "Result:",
+            body,
+        ]
+    )
+
+
+def _format_threat_ask_response(route: object, body: str) -> str:
+    """Render local threat-defense status without creating a work-session record."""
+    return "\n".join(
+        [
+            "Eva ask",
+            "",
+            "Request: LLM threat defense status/policy/preview.",
+            f"Interpreted intent: {getattr(route, 'intent', 'unknown')}",
+            "Mode: read-only local/mock threat-defense preview.",
+            "No work session was recorded and no action was executed.",
+            "No live LLM call was made.",
+            "Untrusted context cannot override trusted policy/instruction hierarchy.",
+            "Secrets/config/session data are blocked.",
+            "Defended context cannot execute tools.",
+            "",
+            "Result:",
+            body,
+        ]
+    )
+
+
+def _format_agent_loop_ask_response(route: object, body: str) -> str:
+    """Render local agent-loop status without creating a work-session record."""
+    return "\n".join(
+        [
+            "Eva ask",
+            "",
+            "Request: Agent Loop v1 status/policy/preview.",
+            f"Interpreted intent: {getattr(route, 'intent', 'unknown')}",
+            "Mode: read-only local/mock agent loop preview.",
+            "No work session was recorded and no action was executed.",
+            "No live LLM call was made.",
+            "Agent loop is local/mock preview only.",
+            "Actions are preview-only.",
+            "Tools are not executed.",
+            "Secrets/config/session data are blocked.",
+            "Browser/desktop/shell/cloud/MCP execution remains locked.",
+            "",
+            "Result:",
+            body,
+        ]
+    )
+
+
+def _format_workflow_planner_ask_response(route: object, body: str) -> str:
+    """Render local workflow-planner status without creating a work-session record."""
+    return "\n".join(
+        [
+            "Eva ask",
+            "",
+            "Request: Agentic Workflow Planner status/policy/preview.",
+            f"Interpreted intent: {getattr(route, 'intent', 'unknown')}",
+            "Mode: read-only local/mock workflow planner preview.",
+            "No work session was recorded and no action was executed.",
+            "No live LLM call was made.",
+            "Workflow planner is local/mock preview only.",
+            "Workflow steps are preview-only.",
+            "Tools are not executed.",
+            "Secrets/config/session data are blocked.",
+            "Arbitrary file reads/writes are blocked.",
+            "Browser/desktop/shell/cloud/MCP execution remains locked.",
+            "Phase 12L remains the only real write path.",
+            "",
+            "Result:",
+            body,
+        ]
+    )
+
+
+def _format_execution_gates_ask_response(route: object, body: str) -> str:
+    """Render local execution-gate status without creating a work-session record."""
+    return "\n".join(
+        [
+            "Eva ask",
+            "",
+            "Request: Controlled Execution Gates status/policy/evaluation.",
+            f"Interpreted intent: {getattr(route, 'intent', 'unknown')}",
+            "Mode: read-only local/mock execution-gate policy preview.",
+            "No work session was recorded and no action was executed.",
+            "No live LLM call was made.",
+            "Execution gates are local/mock policy preview only.",
+            "Tools are not executed.",
+            "Approval alone does not execute.",
+            "Confirmation alone does not execute unless an existing implemented gate accepts it.",
+            "Browser/desktop/shell/cloud/MCP/package execution remains locked.",
+            "Secrets/config/session data are blocked.",
+            "Phase 12L narrow real-create remains the only real write path.",
+            "",
+            "Result:",
+            body,
+        ]
+    )
+
+
+def _format_ai_os_ask_response(route: object, body: str) -> str:
+    """Render local AI OS status without activating any runtime surface."""
+    return "\n".join(
+        [
+            "Eva ask",
+            "",
+            "Request: AI OS dashboard/status/report.",
+            f"Interpreted intent: {getattr(route, 'intent', 'unknown')}",
+            "No live LLM call was made.",
+            "AI OS dashboard is local/status only.",
+            "Preview-only features do not execute.",
+            "Tools are not executed.",
+            "Browser/desktop/shell/cloud/MCP execution remains locked.",
+            "Secrets/config/session data are blocked.",
+            "Phase 12L remains the only real write path.",
+            "",
+            "Result:",
+            body,
+        ]
+    )
+
+
+def _format_voice_ask_response(route: object, body: str) -> str:
+    """Render local Voice Assistant status without touching audio devices."""
+    return "\n".join(
+        [
+            "Eva ask",
+            "",
+            "Request: Voice Assistant Foundation status/policy/preview.",
+            f"Interpreted intent: {getattr(route, 'intent', 'unknown')}",
+            "Voice Assistant is local/mock preview only.",
+            "No microphone access happened.",
+            "No audio playback happened.",
+            "No live ASR/TTS happened.",
+            "No live LLM call was made.",
+            "Voice commands cannot execute tools.",
+            "Secrets/config/session data are blocked.",
+            "Browser/desktop/shell/cloud/MCP execution remains locked.",
+            "Phase 12L remains the only real write path.",
+            "",
+            "Result:",
+            body,
+        ]
+    )
+
+
+def _format_memory_v3_ask_response(route: object, body: str) -> str:
+    """Render local Memory v3 status without exposing raw memory storage."""
+    return "\n".join(
+        [
+            "Eva ask",
+            "",
+            "Request: Memory v3 status/policy/retrieval preview.",
+            f"Interpreted intent: {getattr(route, 'intent', 'unknown')}",
+            "Mode: read-only local memory policy preview.",
+            "No work session was recorded and no memory record was written.",
+            "Memory v3 is local only.",
+            "No live LLM call was made.",
+            "No cloud memory is used.",
+            "Secrets/config/session data are blocked.",
+            "Memory cannot override system/developer/safety policy.",
+            "Memory cannot execute tools.",
+            "Memory context injection is preview/policy only.",
+            "",
+            "Result:",
+            body,
+        ]
+    )
+
+
+def _format_browser_read_ask_response(route: object, body: str) -> str:
+    """Render Phase 24 observation/report output without recording a work session."""
+    return "\n".join(
+        [
+            "Eva ask",
+            "",
+            "Request: Real Browser Read-Only Mode observation/status/policy.",
+            f"Interpreted intent: {getattr(route, 'intent', 'unknown')}",
+            "Browser mode is read-only.",
+            "No clicking.",
+            "No typing.",
+            "No form submission.",
+            "No downloads or uploads.",
+            "No cookies, sessions, or browser profiles.",
+            "No logged-in browser access.",
+            "No browser control.",
+            "No tool execution.",
+            "No work session was recorded and no browser action was executed.",
+            "Phase 12L remains the only real write path.",
+            "",
+            "Result:",
+            body,
+        ]
+    )
+
+
+def _format_desktop_observe_ask_response(route: object, body: str) -> str:
+    """Render Phase 25 observation/report output without recording a work session."""
+    return "\n".join(
+        [
+            "Eva ask",
+            "",
+            "Request: Real Desktop Observation Mode observation/status/policy.",
+            f"Interpreted intent: {getattr(route, 'intent', 'unknown')}",
+            "Desktop mode is observation-only.",
+            "No clicking.",
+            "No typing.",
+            "No hotkeys.",
+            "No app or window control.",
+            "No continuous monitoring.",
+            "No saved screenshots.",
+            "No cookies, sessions, or browser profiles.",
+            "No tool execution.",
+            "No work session was recorded and no desktop action was executed.",
+            "Phase 12L remains the only real write path.",
+            "",
+            "Result:",
+            body,
+        ]
+    )
+
+
+def _resolve_single_approved_file_approval(intent: str) -> str | None:
+    from ..file_agent.approval_ledger import list_file_approval_requests
+
+    approvals = list_file_approval_requests(status="approved_for_future_apply", limit=20)
+    if len(approvals) != 1:
+        return None
+    approval_id = approvals[0].approval_id
+    if intent == "approval_sandbox_verify":
+        return f"eva file approval sandbox verify {approval_id}"
+    if intent == "approval_sandbox_rollback":
+        return f"eva file approval sandbox rollback {approval_id}"
+    return f"eva file approval sandbox apply {approval_id}"
+
+
+def _format_real_create_next_step() -> str:
+    from ..file_agent.approval_ledger import list_file_approval_requests
+    from ..file_agent.real_apply import evaluate_real_apply_eligibility, format_real_apply_eligibility
+
+    eligible = []
+    for approval in list_file_approval_requests(status="approved_for_future_apply", limit=50):
+        item = evaluate_real_apply_eligibility(approval.approval_id)
+        if item.allowed:
+            eligible.append(item)
+    if len(eligible) == 1:
+        return "\n".join(
+            [
+                format_real_apply_eligibility(eligible[0]),
+                "",
+                f"To create it, run: `eva ask confirm real create {eligible[0].approval_id}`.",
+            ]
+        )
+    if not eligible:
+        return "No eligible narrow real-create approval was found. Use `eva file real apply eligibility <approval_id>` to inspect a specific approval. Exact creation requires `confirm real create <approval_id>`."
+    lines = ["Multiple eligible real-create approvals exist. Specify one approval id:"]
+    lines.extend(f"- {item.approval_id}: {item.display_path}" for item in eligible[:10])
+    return "\n".join(lines)
+
+
+def _should_show_skill_workflow_plan(request_text: str) -> bool:
+    text = " ".join(str(request_text or "").lower().split())
+    return any(term in text for term in ("docs note", "phase note", "latest fileagent phase", "latest phase"))
+
+
 def maybe_handle_fast_command(
     message: str,
     tools: ToolRegistry,
@@ -976,6 +2246,1366 @@ def maybe_handle_fast_command(
     original = message.strip()
     if not normalized:
         return None
+
+    ask = _handle_eva_ask_command(normalized, original, tools, session_context, memory, session_id)
+    if ask:
+        return ask
+
+    if normalized in {
+        "eva browser read status",
+        "eva browser read policy",
+        "eva browser read url policy",
+        "eva browser read mock observe",
+        "eva browser read safety report",
+        "eva browser read blocked urls",
+        "eva browser read readiness",
+    }:
+        from ..browser_readonly.formatter import (
+            format_browser_read_blocked_urls,
+            format_browser_read_mock_observe,
+            format_browser_read_policy,
+            format_browser_read_readiness,
+            format_browser_read_safety_report,
+            format_browser_read_status,
+            format_browser_read_url_policy,
+        )
+
+        browser_read_commands = {
+            "eva browser read status": format_browser_read_status,
+            "eva browser read policy": format_browser_read_policy,
+            "eva browser read url policy": format_browser_read_url_policy,
+            "eva browser read mock observe": format_browser_read_mock_observe,
+            "eva browser read safety report": format_browser_read_safety_report,
+            "eva browser read blocked urls": format_browser_read_blocked_urls,
+            "eva browser read readiness": format_browser_read_readiness,
+        }
+        return browser_read_commands[normalized](), "fast-command"
+
+    if normalized == "eva browser read observe" or normalized.startswith("eva browser read observe "):
+        from ..browser_readonly.formatter import format_browser_read_observe
+
+        target = original[len("eva browser read observe") :].strip()
+        return format_browser_read_observe(target or None), "fast-command"
+
+    if normalized in {
+        "eva release status",
+        "eva release demo",
+        "eva release commands",
+        "eva release capability map",
+        "eva release safety proof",
+        "eva release readiness",
+        "eva release limitations",
+        "eva release verification",
+    }:
+        from ..release_demo.formatter import (
+            format_release_capability_map,
+            format_release_commands,
+            format_release_demo,
+            format_release_limitations,
+            format_release_readiness,
+            format_release_safety_proof,
+            format_release_status,
+            format_release_verification,
+        )
+
+        release_commands = {
+            "eva release status": format_release_status,
+            "eva release demo": format_release_demo,
+            "eva release commands": format_release_commands,
+            "eva release capability map": format_release_capability_map,
+            "eva release safety proof": format_release_safety_proof,
+            "eva release readiness": format_release_readiness,
+            "eva release limitations": format_release_limitations,
+            "eva release verification": format_release_verification,
+        }
+        return release_commands[normalized](), "fast-command"
+
+    if normalized in {
+        "eva news status", "eva news policy", "eva news dashboard", "eva news topics",
+        "eva news sources", "eva news freshness", "eva news safety report", "eva news readiness",
+    }:
+        from ..news_dashboard.formatter import format_news_dashboard, format_news_freshness, format_news_policy, format_news_readiness, format_news_safety_report, format_news_sources, format_news_status, format_news_topics
+        commands={"eva news status":format_news_status,"eva news policy":format_news_policy,"eva news dashboard":format_news_dashboard,"eva news topics":format_news_topics,"eva news sources":format_news_sources,"eva news freshness":format_news_freshness,"eva news safety report":format_news_safety_report,"eva news readiness":format_news_readiness}
+        return commands[normalized](), "fast-command"
+    if normalized in {
+        "eva coding status",
+        "eva coding policy",
+        "eva coding specialists",
+        "eva coding task preview",
+        "eva coding project context",
+        "eva coding patch plan",
+        "eva coding review checklist",
+        "eva coding test plan",
+        "eva coding risk review",
+        "eva coding handoff",
+        "eva coding blocked actions",
+        "eva coding readiness",
+    }:
+        from ..coding_agent.formatter import (
+            format_coding_blocked_actions,
+            format_coding_handoff,
+            format_coding_patch_plan,
+            format_coding_policy,
+            format_coding_project_context,
+            format_coding_readiness,
+            format_coding_review_checklist,
+            format_coding_risk_review,
+            format_coding_specialists,
+            format_coding_status,
+            format_coding_task_preview,
+            format_coding_test_plan,
+        )
+
+        coding_commands = {
+            "eva coding status": format_coding_status,
+            "eva coding policy": format_coding_policy,
+            "eva coding specialists": format_coding_specialists,
+            "eva coding task preview": format_coding_task_preview,
+            "eva coding project context": format_coding_project_context,
+            "eva coding patch plan": format_coding_patch_plan,
+            "eva coding review checklist": format_coding_review_checklist,
+            "eva coding test plan": format_coding_test_plan,
+            "eva coding risk review": format_coding_risk_review,
+            "eva coding handoff": format_coding_handoff,
+            "eva coding blocked actions": format_coding_blocked_actions,
+            "eva coding readiness": format_coding_readiness,
+        }
+        return coding_commands[normalized](), "fast-command"
+    if normalized in {
+        "eva desktop control status",
+        "eva desktop control policy",
+        "eva desktop control actions",
+        "eva desktop control dry run",
+        "eva desktop control approvals",
+        "eva desktop control confirmations",
+        "eva desktop control blocked actions",
+        "eva desktop control readiness",
+    }:
+        from ..desktop_control_gate.formatter import (
+            format_desktop_control_actions,
+            format_desktop_control_approvals,
+            format_desktop_control_blocked_actions,
+            format_desktop_control_confirmations,
+            format_desktop_control_dry_run,
+            format_desktop_control_policy,
+            format_desktop_control_readiness,
+            format_desktop_control_status,
+        )
+
+        desktop_control_commands = {
+            "eva desktop control status": format_desktop_control_status,
+            "eva desktop control policy": format_desktop_control_policy,
+            "eva desktop control actions": format_desktop_control_actions,
+            "eva desktop control dry run": format_desktop_control_dry_run,
+            "eva desktop control approvals": format_desktop_control_approvals,
+            "eva desktop control confirmations": format_desktop_control_confirmations,
+            "eva desktop control blocked actions": format_desktop_control_blocked_actions,
+            "eva desktop control readiness": format_desktop_control_readiness,
+        }
+        return desktop_control_commands[normalized](), "fast-command"
+
+    if normalized in {
+        "eva desktop observe status",
+        "eva desktop observe policy",
+        "eva desktop observe backend",
+        "eva desktop observe mock",
+        "eva desktop observe safety report",
+        "eva desktop observe sensitive screens",
+        "eva desktop observe redaction policy",
+        "eva desktop observe readiness",
+    }:
+        from ..desktop_observation.formatter import (
+            format_desktop_observe_backend,
+            format_desktop_observe_mock,
+            format_desktop_observe_policy,
+            format_desktop_observe_readiness,
+            format_desktop_observe_redaction_policy,
+            format_desktop_observe_safety_report,
+            format_desktop_observe_sensitive_screens,
+            format_desktop_observe_status,
+        )
+
+        desktop_observe_commands = {
+            "eva desktop observe status": format_desktop_observe_status,
+            "eva desktop observe policy": format_desktop_observe_policy,
+            "eva desktop observe backend": format_desktop_observe_backend,
+            "eva desktop observe mock": format_desktop_observe_mock,
+            "eva desktop observe safety report": format_desktop_observe_safety_report,
+            "eva desktop observe sensitive screens": format_desktop_observe_sensitive_screens,
+            "eva desktop observe redaction policy": format_desktop_observe_redaction_policy,
+            "eva desktop observe readiness": format_desktop_observe_readiness,
+        }
+        return desktop_observe_commands[normalized](), "fast-command"
+
+    if normalized in {"eva control center", "eva control center status", "eva dashboard status", "eva control status"}:
+        from ..control_center.status import format_control_center_text
+
+        return format_control_center_text(), "fast-command"
+
+    if normalized in {"eva control center summary", "eva dashboard summary"}:
+        from ..control_center.status import format_control_center_summary_text
+
+        return format_control_center_summary_text(), "fast-command"
+
+    if normalized in {"eva sessions status", "eva work status"}:
+        from ..work_sessions.formatter import format_work_sessions_status
+
+        return format_work_sessions_status(), "fast-command"
+
+    if normalized == "eva sessions recent":
+        from ..work_sessions.formatter import summarize_recent_work_sessions
+
+        return summarize_recent_work_sessions(), "fast-command"
+
+    if normalized == "eva session latest":
+        from ..work_sessions.status import format_latest_work_session
+
+        return format_latest_work_session(), "fast-command"
+
+    if normalized == "eva audit timeline":
+        from ..work_sessions.status import format_audit_timeline
+
+        return format_audit_timeline(), "fast-command"
+
+    if normalized.startswith("eva session timeline "):
+        from ..work_sessions.status import format_work_session_timeline_by_id
+
+        session_ref = original[len("eva session timeline ") :].strip()
+        return format_work_session_timeline_by_id(session_ref), "fast-command"
+
+    if normalized.startswith("eva session "):
+        from ..work_sessions.status import format_work_session_detail
+
+        session_ref = original[len("eva session ") :].strip()
+        return format_work_session_detail(session_ref), "fast-command"
+
+    if normalized == "eva locked features":
+        from ..control_center.status import format_locked_features_text
+
+        return format_locked_features_text(), "fast-command"
+
+    if normalized == "eva enabled features":
+        from ..control_center.status import format_enabled_features_text
+
+        return format_enabled_features_text(), "fast-command"
+
+    if normalized == "eva next safe step":
+        from ..control_center.status import format_next_safe_step_text
+
+        return format_next_safe_step_text(), "fast-command"
+
+    if normalized == "eva project inspect":
+        from ..skills.project_inspection import format_project_inspection
+
+        return format_project_inspection(), "fast-command"
+
+    if normalized == "eva project reality check":
+        from ..skills.reality_check import format_reality_check
+
+        return format_reality_check(), "fast-command"
+
+    if normalized == "eva project recent changes":
+        from ..skills.project_inspection import format_recent_project_changes
+
+        return format_recent_project_changes(), "fast-command"
+
+    if normalized == "eva project next step":
+        from ..skills.project_inspection import format_project_next_step
+
+        return format_project_next_step(), "fast-command"
+
+    if normalized == "eva project proof":
+        from ..skills.reality_check import format_project_proof
+
+        return format_project_proof(), "fast-command"
+
+    if normalized == "eva done check":
+        from ..skills.reality_check import format_done_check
+
+        return format_done_check(), "fast-command"
+
+    if normalized == "eva phase status":
+        from ..skills.project_inspection import format_project_inspection
+
+        return format_project_inspection(), "fast-command"
+
+    if normalized in {"eva specialists status", "eva specialists", "eva specialists list"}:
+        from ..specialists.formatter import format_specialist_list
+        from ..specialists.status import format_specialist_status
+
+        body = format_specialist_status() if normalized == "eva specialists status" else format_specialist_list()
+        return body, "fast-command"
+
+    specialist_id = _after_prefix(original, ("eva specialist ",))
+    if specialist_id:
+        from ..specialists.formatter import format_specialist_detail
+
+        return format_specialist_detail(specialist_id.strip()), "fast-command"
+
+    if normalized in {"eva skills status", "eva skills", "eva skills list"}:
+        from ..skills.formatter import format_skill_list
+        from ..skills.status import format_skill_status
+
+        body = format_skill_status() if normalized == "eva skills status" else format_skill_list()
+        return body, "fast-command"
+
+    skill_id = _after_prefix(original, ("eva skill ",))
+    if skill_id:
+        from ..skills.formatter import format_skill_detail
+
+        return format_skill_detail(skill_id.strip()), "fast-command"
+
+    if normalized in {"eva workflows status", "eva workflows", "eva workflows list"}:
+        from ..skills.formatter import format_workflow_list
+        from ..skills.status import format_workflow_status
+
+        body = format_workflow_status() if normalized == "eva workflows status" else format_workflow_list()
+        return body, "fast-command"
+
+    if normalized in {"eva workflow state", "eva file latest status"}:
+        from ..skills.workflow_state import format_workflow_state_summary, summarize_fileagent_workflow_state
+
+        return format_workflow_state_summary(summarize_fileagent_workflow_state()), "fast-command"
+
+    if normalized == "eva workflow next":
+        from ..skills.workflow_state import classify_next_fileagent_step, format_workflow_next_step
+
+        return format_workflow_next_step(classify_next_fileagent_step("what should I do next")), "fast-command"
+
+    if normalized == "eva workflow latest approval":
+        from ..skills.workflow_state import find_latest_approved_approval, find_latest_pending_approval, format_latest_workflow_context
+
+        return "\n\n".join([format_latest_workflow_context(find_latest_pending_approval()), format_latest_workflow_context(find_latest_approved_approval())]), "fast-command"
+
+    if normalized == "eva workflow latest sandbox":
+        from ..skills.workflow_state import find_latest_sandbox_apply, format_latest_workflow_context
+
+        return format_latest_workflow_context(find_latest_sandbox_apply()), "fast-command"
+
+    if normalized in {"eva workflow latest real create", "eva file latest real create"}:
+        from ..skills.workflow_state import find_latest_real_create, format_latest_workflow_context
+
+        return format_latest_workflow_context(find_latest_real_create()), "fast-command"
+
+    if normalized in {"eva workflow latest rollback", "eva file latest rollback"}:
+        from ..skills.workflow_state import find_latest_rollback_available, format_latest_workflow_context
+
+        return format_latest_workflow_context(find_latest_rollback_available()), "fast-command"
+
+    if normalized in {"eva golden workflows", "eva golden workflow status", "eva golden workflow help", "eva workflow golden status"}:
+        from ..golden_workflows.status import format_golden_workflows_text
+
+        return format_golden_workflows_text(), "fast-command"
+
+    if normalized == "eva workflow golden test plan":
+        from ..golden_workflows.status import format_golden_workflow_test_plan
+
+        return format_golden_workflow_test_plan(), "fast-command"
+
+    if normalized == "eva workflow golden latest":
+        from ..golden_workflows.status import format_golden_workflow_latest
+
+        return format_golden_workflow_latest(), "fast-command"
+
+    if normalized == "eva workflow golden proof":
+        from ..golden_workflows.status import format_golden_workflow_proof
+
+        return format_golden_workflow_proof(), "fast-command"
+
+    if normalized == "eva os status":
+        from ..ai_os.formatter import format_ai_os_status
+        return format_ai_os_status(), "fast-command"
+    if normalized == "eva os dashboard":
+        from ..ai_os.formatter import format_ai_os_dashboard
+        return format_ai_os_dashboard(), "fast-command"
+    if normalized == "eva os system map":
+        from ..ai_os.formatter import format_ai_os_system_map
+        return format_ai_os_system_map(), "fast-command"
+    if normalized == "eva os capability matrix":
+        from ..ai_os.formatter import format_ai_os_capability_matrix
+        return format_ai_os_capability_matrix(), "fast-command"
+    if normalized == "eva os feature states":
+        from ..ai_os.formatter import format_ai_os_feature_states
+        return format_ai_os_feature_states(), "fast-command"
+    if normalized == "eva os safety boundaries":
+        from ..ai_os.formatter import format_ai_os_safety_boundaries
+        return format_ai_os_safety_boundaries(), "fast-command"
+    if normalized == "eva os locked features":
+        from ..ai_os.formatter import format_ai_os_locked_features
+        return format_ai_os_locked_features(), "fast-command"
+    if normalized == "eva os next safe step":
+        from ..ai_os.formatter import format_ai_os_next_safe_step
+        return format_ai_os_next_safe_step(), "fast-command"
+    if normalized == "eva os readiness":
+        from ..ai_os.formatter import format_ai_os_readiness
+        return format_ai_os_readiness(), "fast-command"
+
+    if normalized == "eva voice status":
+        from ..voice_assistant.formatter import format_voice_status
+        return format_voice_status(), "fast-command"
+    if normalized == "eva voice policy":
+        from ..voice_assistant.formatter import format_voice_policy
+        return format_voice_policy(), "fast-command"
+    if normalized == "eva voice providers":
+        from ..voice_assistant.formatter import format_voice_providers
+        return format_voice_providers(), "fast-command"
+    if normalized == "eva voice listen state":
+        from ..voice_assistant.formatter import format_voice_listen_state
+        return format_voice_listen_state(), "fast-command"
+    if normalized == "eva voice transcript safety":
+        from ..voice_assistant.formatter import format_voice_transcript_safety
+        return format_voice_transcript_safety(), "fast-command"
+    if normalized == "eva voice route preview":
+        from ..voice_assistant.formatter import format_voice_route_preview
+        return format_voice_route_preview(), "fast-command"
+    if normalized == "eva voice confirmations":
+        from ..voice_assistant.formatter import format_voice_confirmations
+        return format_voice_confirmations(), "fast-command"
+    if normalized == "eva voice readiness":
+        from ..voice_assistant.formatter import format_voice_readiness
+        return format_voice_readiness(), "fast-command"
+
+    if normalized == "eva memory v3 status":
+        from ..memory_v3.formatter import format_memory_v3_status
+        return format_memory_v3_status(), "fast-command"
+    if normalized == "eva memory v3 policy":
+        from ..memory_v3.formatter import format_memory_v3_policy
+        return format_memory_v3_policy(), "fast-command"
+    if normalized == "eva memory v3 sources":
+        from ..memory_v3.formatter import format_memory_v3_sources
+        return format_memory_v3_sources(), "fast-command"
+    if normalized == "eva memory v3 privacy":
+        from ..memory_v3.formatter import format_memory_v3_privacy
+        return format_memory_v3_privacy(), "fast-command"
+    if normalized == "eva memory v3 freshness":
+        from ..memory_v3.formatter import format_memory_v3_freshness
+        return format_memory_v3_freshness(), "fast-command"
+    if normalized == "eva memory v3 conflicts":
+        from ..memory_v3.formatter import format_memory_v3_conflicts
+        return format_memory_v3_conflicts(), "fast-command"
+    if normalized == "eva memory v3 retrieval preview":
+        from ..memory_v3.formatter import format_memory_v3_retrieval_preview
+        return format_memory_v3_retrieval_preview(), "fast-command"
+    if normalized == "eva memory v3 readiness":
+        from ..memory_v3.formatter import format_memory_v3_readiness
+        return format_memory_v3_readiness(), "fast-command"
+
+    if normalized == "eva execution gates status":
+        from ..execution_gates.formatter import format_execution_gate_status
+        return format_execution_gate_status(), "fast-command"
+    if normalized == "eva execution gates policy":
+        from ..execution_gates.formatter import format_execution_gate_policy
+        return format_execution_gate_policy(), "fast-command"
+    if normalized == "eva execution gates evaluate":
+        from ..execution_gates.formatter import format_execution_gate_evaluation
+        return format_execution_gate_evaluation(), "fast-command"
+    if normalized == "eva execution gates approvals":
+        from ..execution_gates.formatter import format_execution_gate_approvals
+        return format_execution_gate_approvals(), "fast-command"
+    if normalized == "eva execution gates confirmations":
+        from ..execution_gates.formatter import format_execution_gate_confirmations
+        return format_execution_gate_confirmations(), "fast-command"
+    if normalized == "eva execution gates rollback":
+        from ..execution_gates.formatter import format_execution_gate_rollback
+        return format_execution_gate_rollback(), "fast-command"
+    if normalized == "eva execution gates blocked actions":
+        from ..execution_gates.formatter import format_execution_gate_blocked_actions
+        return format_execution_gate_blocked_actions(), "fast-command"
+    if normalized == "eva execution gates readiness":
+        from ..execution_gates.formatter import format_execution_gate_readiness
+        return format_execution_gate_readiness(), "fast-command"
+
+    if normalized == "eva workflow planner status":
+        from ..workflow_planner.formatter import format_workflow_planner_status
+        return format_workflow_planner_status(), "fast-command"
+    if normalized == "eva workflow planner catalog":
+        from ..workflow_planner.formatter import format_workflow_planner_catalog
+        return format_workflow_planner_catalog(), "fast-command"
+    if normalized == "eva workflow planner policy":
+        from ..workflow_planner.formatter import format_workflow_planner_policy
+        return format_workflow_planner_policy(), "fast-command"
+    if normalized == "eva workflow planner preview":
+        from ..workflow_planner.formatter import format_workflow_planner_preview
+        return format_workflow_planner_preview(), "fast-command"
+    if normalized == "eva workflow planner dependencies":
+        from ..workflow_planner.formatter import format_workflow_planner_dependencies
+        return format_workflow_planner_dependencies(), "fast-command"
+    if normalized == "eva workflow planner approvals":
+        from ..workflow_planner.formatter import format_workflow_planner_approvals
+        return format_workflow_planner_approvals(), "fast-command"
+    if normalized == "eva workflow planner rollback":
+        from ..workflow_planner.formatter import format_workflow_planner_rollback
+        return format_workflow_planner_rollback(), "fast-command"
+    if normalized == "eva workflow planner readiness":
+        from ..workflow_planner.formatter import format_workflow_planner_readiness
+        return format_workflow_planner_readiness(), "fast-command"
+
+    workflow_id = _after_prefix(original, ("eva workflow ",))
+    if workflow_id:
+        from ..skills.formatter import format_workflow_detail
+
+        return format_workflow_detail(workflow_id.strip()), "fast-command"
+
+    if normalized in {"eva golden workflows", "eva golden workflow status", "eva golden workflow help", "eva workflow golden status"}:
+        from ..golden_workflows.status import format_golden_workflows_text
+
+        return format_golden_workflows_text(), "fast-command"
+
+    if normalized == "eva workflow golden test plan":
+        from ..golden_workflows.status import format_golden_workflow_test_plan
+
+        return format_golden_workflow_test_plan(), "fast-command"
+
+    if normalized == "eva workflow golden latest":
+        from ..golden_workflows.status import format_golden_workflow_latest
+
+        return format_golden_workflow_latest(), "fast-command"
+
+    if normalized == "eva workflow golden proof":
+        from ..golden_workflows.status import format_golden_workflow_proof
+
+        return format_golden_workflow_proof(), "fast-command"
+
+    if normalized == "eva golden workflow demo":
+        from ..golden_workflows.formatter import format_golden_workflow_result
+        from ..golden_workflows.runner import start_safe_project_note_workflow
+
+        return format_golden_workflow_result(start_safe_project_note_workflow("demo safe project note")), "fast-command"
+
+    golden_project_note = _after_prefix(original, ("eva golden workflow start project note ",))
+    if normalized == "eva golden workflow start project note" or golden_project_note:
+        from ..golden_workflows.formatter import format_golden_workflow_result
+        from ..golden_workflows.runner import start_safe_project_note_workflow
+
+        return format_golden_workflow_result(start_safe_project_note_workflow(golden_project_note or "create a project note about Eva")), "fast-command"
+
+    golden_continue = _after_prefix(original, ("eva golden workflow continue ",))
+    if normalized == "eva golden workflow continue" or golden_continue:
+        from ..golden_workflows.formatter import format_golden_workflow_result
+        from ..golden_workflows.runner import continue_safe_project_note_workflow
+
+        return format_golden_workflow_result(continue_safe_project_note_workflow(golden_continue or "continue golden workflow")), "fast-command"
+
+    if normalized in {"eva dashboard url", "eva control center url", "eva control url"}:
+        from ..control_center.status import format_control_center_url
+
+        return format_control_center_url(), "fast-command"
+
+    if normalized == "eva authority status":
+        from ..authority.status import format_authority_status
+
+        return format_authority_status(), "fast-command"
+
+    if normalized in {"eva smoke status", "eva verification status"}:
+        from ..core.ux_messages import format_quick_status_summary
+
+        return format_quick_status_summary(), "fast-command"
+
+    if normalized == "eva verify quick command":
+        from ..core.ux_messages import format_verify_quick_command
+
+        return format_verify_quick_command(), "fast-command"
+
+    if normalized == "eva verify full command":
+        from ..core.ux_messages import format_verify_full_command
+
+        return format_verify_full_command(), "fast-command"
+
+    if normalized == "eva phase 12 status":
+        from ..core.ux_messages import format_phase12_status
+
+        return format_phase12_status(), "fast-command"
+
+    if normalized in {"eva phase 12 ready", "eva phase12 ready"}:
+        from ..core.phase12_ready import format_phase12_ready
+
+        return format_phase12_ready(), "fast-command"
+
+    if normalized in {"eva phase 12 summary", "eva phase12 summary"}:
+        from ..core.phase12_ready import format_phase12_summary
+
+        return format_phase12_summary(), "fast-command"
+
+    if normalized in {"eva phase 12 limits", "eva phase12 limits"}:
+        from ..core.phase12_ready import format_phase12_limits
+
+        return format_phase12_limits(), "fast-command"
+
+    if normalized in {"eva phase 12 proof", "eva phase12 proof"}:
+        from ..core.phase12_ready import format_phase12_proof
+
+        return format_phase12_proof(), "fast-command"
+
+    if normalized == "eva desktop status":
+        from ..desktop_agent.formatter import format_desktop_status
+
+        return format_desktop_status(), "fast-command"
+
+    if normalized == "eva llm status":
+        from ..llm.formatter import format_llm_status as format_eva_llm_router_status
+        return format_eva_llm_router_status(), "fast-command"
+    if normalized == "eva llm providers":
+        from ..llm.formatter import format_llm_providers
+        return format_llm_providers(), "fast-command"
+    if normalized == "eva llm routing policy":
+        from ..llm.formatter import format_llm_routing_policy
+        return format_llm_routing_policy(), "fast-command"
+    if normalized == "eva llm fallback policy":
+        from ..llm.formatter import format_llm_fallback_policy
+        return format_llm_fallback_policy(), "fast-command"
+    if normalized == "eva llm limits":
+        from ..llm.formatter import format_llm_limits
+        return format_llm_limits(), "fast-command"
+    if normalized == "eva llm structured output":
+        from ..llm.formatter import format_llm_structured_output
+        return format_llm_structured_output(), "fast-command"
+    if normalized == "eva llm validation status":
+        from ..llm.formatter import format_llm_validation_status
+        return format_llm_validation_status(), "fast-command"
+    if normalized == "eva llm schema registry":
+        from ..llm.formatter import format_llm_schema_registry
+        return format_llm_schema_registry(), "fast-command"
+    if normalized == "eva llm validation policy":
+        from ..llm.formatter import format_llm_validation_policy
+        return format_llm_validation_policy(), "fast-command"
+    if normalized == "eva llm repair policy":
+        from ..llm.formatter import format_llm_repair_policy
+        return format_llm_repair_policy(), "fast-command"
+    if normalized == "eva llm validate mock":
+        from ..llm.formatter import format_llm_validate_mock
+        return format_llm_validate_mock(), "fast-command"
+    if normalized == "eva llm validate invalid examples":
+        from ..llm.formatter import format_llm_validate_invalid_examples
+        return format_llm_validate_invalid_examples(), "fast-command"
+    if normalized == "eva llm validation readiness":
+        from ..llm.formatter import format_llm_validation_readiness
+        return format_llm_validation_readiness(), "fast-command"
+    if normalized == "eva llm red team status":
+        from ..llm.formatter import format_llm_red_team_status
+        return format_llm_red_team_status(), "fast-command"
+    if normalized == "eva llm red team cases":
+        from ..llm.formatter import format_llm_red_team_cases
+        return format_llm_red_team_cases(), "fast-command"
+    if normalized == "eva llm red team run":
+        from ..llm.formatter import format_llm_red_team_run
+        return format_llm_red_team_run(), "fast-command"
+    if normalized == "eva llm failure tests":
+        from ..llm.formatter import format_llm_failure_tests
+        return format_llm_failure_tests(), "fast-command"
+    if normalized == "eva llm safety failure report":
+        from ..llm.formatter import format_llm_safety_failure_report
+        return format_llm_safety_failure_report(), "fast-command"
+    if normalized == "eva llm red team readiness":
+        from ..llm.formatter import format_llm_red_team_readiness
+        return format_llm_red_team_readiness(), "fast-command"
+    llm_route_preview = _after_prefix(original, ("eva llm route preview ",))
+    if llm_route_preview:
+        from ..llm.formatter import format_llm_route_preview
+        return format_llm_route_preview(llm_route_preview), "fast-command"
+    if normalized == "eva llm readiness":
+        from ..llm.formatter import format_llm_readiness
+        return format_llm_readiness(), "fast-command"
+    if normalized == "eva llm fallback chain":
+        from ..llm.formatter import format_llm_fallback_chain
+        return format_llm_fallback_chain(), "fast-command"
+    llm_fallback_simulation = _after_prefix(original, ("eva llm fallback simulate ",))
+    if llm_fallback_simulation:
+        from ..llm.formatter import format_llm_fallback_simulation
+        return format_llm_fallback_simulation(llm_fallback_simulation), "fast-command"
+    if normalized == "eva llm degraded mode":
+        from ..llm.formatter import format_llm_degraded_mode
+        return format_llm_degraded_mode(), "fast-command"
+    if normalized == "eva llm session limits":
+        from ..llm.formatter import format_llm_session_limits
+        return format_llm_session_limits(), "fast-command"
+    if normalized == "eva llm rate limits":
+        from ..llm.formatter import format_llm_rate_limits
+        return format_llm_rate_limits(), "fast-command"
+    if normalized == "eva llm routing audit preview":
+        from ..llm.formatter import format_llm_routing_audit_preview
+        return format_llm_routing_audit_preview(), "fast-command"
+    if normalized == "eva llm failure modes":
+        from ..llm.formatter import format_llm_failure_modes
+        return format_llm_failure_modes(), "fast-command"
+    if normalized == "eva llm runaway protection":
+        from ..llm.formatter import format_llm_runaway_protection
+        return format_llm_runaway_protection(), "fast-command"
+
+    if normalized == "eva context status":
+        from ..context_engine.formatter import format_context_status
+        return format_context_status(), "fast-command"
+    if normalized == "eva context sources":
+        from ..context_engine.formatter import format_context_sources
+        return format_context_sources(), "fast-command"
+    if normalized == "eva context policy":
+        from ..context_engine.formatter import format_context_policy
+        return format_context_policy(), "fast-command"
+    if normalized == "eva context budget":
+        from ..context_engine.formatter import format_context_budget
+        return format_context_budget(), "fast-command"
+    if normalized == "eva context assemble preview":
+        from ..context_engine.formatter import format_context_assemble_preview
+        return format_context_assemble_preview(original), "fast-command"
+    if normalized == "eva context grounding report":
+        from ..context_engine.formatter import format_context_grounding_report
+        return format_context_grounding_report(original), "fast-command"
+    if normalized == "eva context redaction policy":
+        from ..context_engine.formatter import format_context_redaction_policy
+        return format_context_redaction_policy(), "fast-command"
+    if normalized == "eva context readiness":
+        from ..context_engine.formatter import format_context_readiness
+        return format_context_readiness(), "fast-command"
+    if normalized == "eva threat status":
+        from ..threat_defense.formatter import format_threat_status
+        return format_threat_status(), "fast-command"
+    if normalized == "eva threat catalog":
+        from ..threat_defense.formatter import format_threat_catalog
+        return format_threat_catalog(), "fast-command"
+    if normalized == "eva threat policy":
+        from ..threat_defense.formatter import format_threat_policy
+        return format_threat_policy(), "fast-command"
+    if normalized == "eva threat scan preview":
+        from ..threat_defense.formatter import format_threat_scan_preview
+        return format_threat_scan_preview(), "fast-command"
+    if normalized == "eva threat injection examples":
+        from ..threat_defense.formatter import format_threat_injection_examples
+        return format_threat_injection_examples(), "fast-command"
+    if normalized == "eva threat exfiltration examples":
+        from ..threat_defense.formatter import format_threat_exfiltration_examples
+        return format_threat_exfiltration_examples(), "fast-command"
+    if normalized == "eva threat context guard":
+        from ..threat_defense.formatter import format_threat_context_guard
+        return format_threat_context_guard(), "fast-command"
+    if normalized == "eva threat readiness":
+        from ..threat_defense.formatter import format_threat_readiness
+        return format_threat_readiness(), "fast-command"
+    if normalized == "eva agent loop status":
+        from ..agent_loop.formatter import format_agent_loop_status
+        return format_agent_loop_status(), "fast-command"
+    if normalized == "eva agent loop policy":
+        from ..agent_loop.formatter import format_agent_loop_policy
+        return format_agent_loop_policy(), "fast-command"
+    if normalized == "eva agent loop run preview":
+        from ..agent_loop.formatter import format_agent_loop_run_preview
+        return format_agent_loop_run_preview(), "fast-command"
+    if normalized == "eva agent loop steps":
+        from ..agent_loop.formatter import format_agent_loop_steps
+        return format_agent_loop_steps(), "fast-command"
+    if normalized == "eva agent loop action previews":
+        from ..agent_loop.formatter import format_agent_loop_action_previews
+        return format_agent_loop_action_previews(), "fast-command"
+    if normalized == "eva agent loop safety report":
+        from ..agent_loop.formatter import format_agent_loop_safety_report
+        return format_agent_loop_safety_report(), "fast-command"
+    if normalized == "eva agent loop stop reasons":
+        from ..agent_loop.formatter import format_agent_loop_stop_reasons
+        return format_agent_loop_stop_reasons(), "fast-command"
+    if normalized == "eva agent loop readiness":
+        from ..agent_loop.formatter import format_agent_loop_readiness
+        return format_agent_loop_readiness(), "fast-command"
+    if normalized == "eva os status":
+        from ..ai_os.formatter import format_ai_os_status
+        return format_ai_os_status(), "fast-command"
+    if normalized == "eva os dashboard":
+        from ..ai_os.formatter import format_ai_os_dashboard
+        return format_ai_os_dashboard(), "fast-command"
+    if normalized == "eva os system map":
+        from ..ai_os.formatter import format_ai_os_system_map
+        return format_ai_os_system_map(), "fast-command"
+    if normalized == "eva os capability matrix":
+        from ..ai_os.formatter import format_ai_os_capability_matrix
+        return format_ai_os_capability_matrix(), "fast-command"
+    if normalized == "eva os feature states":
+        from ..ai_os.formatter import format_ai_os_feature_states
+        return format_ai_os_feature_states(), "fast-command"
+    if normalized == "eva os safety boundaries":
+        from ..ai_os.formatter import format_ai_os_safety_boundaries
+        return format_ai_os_safety_boundaries(), "fast-command"
+    if normalized == "eva os locked features":
+        from ..ai_os.formatter import format_ai_os_locked_features
+        return format_ai_os_locked_features(), "fast-command"
+    if normalized == "eva os next safe step":
+        from ..ai_os.formatter import format_ai_os_next_safe_step
+        return format_ai_os_next_safe_step(), "fast-command"
+    if normalized == "eva os readiness":
+        from ..ai_os.formatter import format_ai_os_readiness
+        return format_ai_os_readiness(), "fast-command"
+    if normalized == "eva voice status":
+        from ..voice_assistant.formatter import format_voice_status
+        return format_voice_status(), "fast-command"
+    if normalized == "eva voice policy":
+        from ..voice_assistant.formatter import format_voice_policy
+        return format_voice_policy(), "fast-command"
+    if normalized == "eva voice providers":
+        from ..voice_assistant.formatter import format_voice_providers
+        return format_voice_providers(), "fast-command"
+    if normalized == "eva voice listen state":
+        from ..voice_assistant.formatter import format_voice_listen_state
+        return format_voice_listen_state(), "fast-command"
+    if normalized == "eva voice transcript safety":
+        from ..voice_assistant.formatter import format_voice_transcript_safety
+        return format_voice_transcript_safety(), "fast-command"
+    if normalized == "eva voice route preview":
+        from ..voice_assistant.formatter import format_voice_route_preview
+        return format_voice_route_preview(), "fast-command"
+    if normalized == "eva voice confirmations":
+        from ..voice_assistant.formatter import format_voice_confirmations
+        return format_voice_confirmations(), "fast-command"
+    if normalized == "eva voice readiness":
+        from ..voice_assistant.formatter import format_voice_readiness
+        return format_voice_readiness(), "fast-command"
+    if normalized == "eva memory v3 status":
+        from ..memory_v3.formatter import format_memory_v3_status
+        return format_memory_v3_status(), "fast-command"
+    if normalized == "eva memory v3 policy":
+        from ..memory_v3.formatter import format_memory_v3_policy
+        return format_memory_v3_policy(), "fast-command"
+    if normalized == "eva memory v3 sources":
+        from ..memory_v3.formatter import format_memory_v3_sources
+        return format_memory_v3_sources(), "fast-command"
+    if normalized == "eva memory v3 privacy":
+        from ..memory_v3.formatter import format_memory_v3_privacy
+        return format_memory_v3_privacy(), "fast-command"
+    if normalized == "eva memory v3 freshness":
+        from ..memory_v3.formatter import format_memory_v3_freshness
+        return format_memory_v3_freshness(), "fast-command"
+    if normalized == "eva memory v3 conflicts":
+        from ..memory_v3.formatter import format_memory_v3_conflicts
+        return format_memory_v3_conflicts(), "fast-command"
+    if normalized == "eva memory v3 retrieval preview":
+        from ..memory_v3.formatter import format_memory_v3_retrieval_preview
+        return format_memory_v3_retrieval_preview(), "fast-command"
+    if normalized == "eva memory v3 readiness":
+        from ..memory_v3.formatter import format_memory_v3_readiness
+        return format_memory_v3_readiness(), "fast-command"
+    if normalized == "eva execution gates status":
+        from ..execution_gates.formatter import format_execution_gate_status
+        return format_execution_gate_status(), "fast-command"
+    if normalized == "eva execution gates policy":
+        from ..execution_gates.formatter import format_execution_gate_policy
+        return format_execution_gate_policy(), "fast-command"
+    if normalized == "eva execution gates evaluate":
+        from ..execution_gates.formatter import format_execution_gate_evaluation
+        return format_execution_gate_evaluation(), "fast-command"
+    if normalized == "eva execution gates approvals":
+        from ..execution_gates.formatter import format_execution_gate_approvals
+        return format_execution_gate_approvals(), "fast-command"
+    if normalized == "eva execution gates confirmations":
+        from ..execution_gates.formatter import format_execution_gate_confirmations
+        return format_execution_gate_confirmations(), "fast-command"
+    if normalized == "eva execution gates rollback":
+        from ..execution_gates.formatter import format_execution_gate_rollback
+        return format_execution_gate_rollback(), "fast-command"
+    if normalized == "eva execution gates blocked actions":
+        from ..execution_gates.formatter import format_execution_gate_blocked_actions
+        return format_execution_gate_blocked_actions(), "fast-command"
+    if normalized == "eva execution gates readiness":
+        from ..execution_gates.formatter import format_execution_gate_readiness
+        return format_execution_gate_readiness(), "fast-command"
+    if normalized == "eva workflow planner status":
+        from ..workflow_planner.formatter import format_workflow_planner_status
+        return format_workflow_planner_status(), "fast-command"
+    if normalized == "eva workflow planner catalog":
+        from ..workflow_planner.formatter import format_workflow_planner_catalog
+        return format_workflow_planner_catalog(), "fast-command"
+    if normalized == "eva workflow planner policy":
+        from ..workflow_planner.formatter import format_workflow_planner_policy
+        return format_workflow_planner_policy(), "fast-command"
+    if normalized == "eva workflow planner preview":
+        from ..workflow_planner.formatter import format_workflow_planner_preview
+        return format_workflow_planner_preview(), "fast-command"
+    if normalized == "eva workflow planner dependencies":
+        from ..workflow_planner.formatter import format_workflow_planner_dependencies
+        return format_workflow_planner_dependencies(), "fast-command"
+    if normalized == "eva workflow planner approvals":
+        from ..workflow_planner.formatter import format_workflow_planner_approvals
+        return format_workflow_planner_approvals(), "fast-command"
+    if normalized == "eva workflow planner rollback":
+        from ..workflow_planner.formatter import format_workflow_planner_rollback
+        return format_workflow_planner_rollback(), "fast-command"
+    if normalized == "eva workflow planner readiness":
+        from ..workflow_planner.formatter import format_workflow_planner_readiness
+        return format_workflow_planner_readiness(), "fast-command"
+
+    if normalized == "eva desktop phase 14 status":
+        from ..desktop_agent.formatter import format_desktop_phase14_status
+
+        return format_desktop_phase14_status(), "fast-command"
+
+    if normalized == "eva desktop phase 14 summary":
+        from ..desktop_agent.formatter import format_desktop_phase14_summary
+
+        return format_desktop_phase14_summary(), "fast-command"
+
+    if normalized == "eva desktop phase 14 limits":
+        from ..desktop_agent.formatter import format_desktop_phase14_limits
+
+        return format_desktop_phase14_limits(), "fast-command"
+
+    if normalized == "eva desktop phase 14 ready":
+        from ..desktop_agent.formatter import format_desktop_phase14_ready
+
+        return format_desktop_phase14_ready(), "fast-command"
+
+    if normalized == "eva desktop phase 14 final proof":
+        from ..desktop_agent.formatter import format_desktop_phase14_final_proof
+
+        return format_desktop_phase14_final_proof(), "fast-command"
+
+    if normalized == "eva desktop readiness proof":
+        from ..desktop_agent.formatter import format_desktop_readiness_proof
+
+        return format_desktop_readiness_proof(), "fast-command"
+
+    if normalized == "eva desktop locked status":
+        from ..desktop_agent.formatter import format_desktop_locked_status
+
+        return format_desktop_locked_status(), "fast-command"
+
+    if normalized == "eva desktop readiness gaps":
+        from ..desktop_agent.formatter import format_desktop_readiness_gaps
+
+        return format_desktop_readiness_gaps(), "fast-command"
+
+    if normalized == "eva desktop policy":
+        from ..desktop_agent.formatter import format_desktop_policy
+
+        return format_desktop_policy(), "fast-command"
+
+    if normalized == "eva desktop blocked actions":
+        from ..desktop_agent.formatter import format_desktop_blocked_actions
+
+        return format_desktop_blocked_actions(), "fast-command"
+
+    desktop_action_safety = _after_prefix(original, ("eva desktop action safety ",))
+    if desktop_action_safety:
+        from ..desktop_agent.formatter import format_desktop_action_safety
+
+        return format_desktop_action_safety(desktop_action_safety), "fast-command"
+
+    desktop_action_dry_run = _after_prefix(original, ("eva desktop action dry run ",))
+    if desktop_action_dry_run:
+        from ..desktop_agent.formatter import format_desktop_action_dry_run
+
+        return format_desktop_action_dry_run(desktop_action_dry_run), "fast-command"
+
+    desktop_action_plan = _after_prefix(original, ("eva desktop action plan ",))
+    if desktop_action_plan:
+        from ..desktop_agent.formatter import format_desktop_action_plan
+
+        return format_desktop_action_plan(desktop_action_plan), "fast-command"
+
+    desktop_action_risk = _after_prefix(original, ("eva desktop action risk ",))
+    if desktop_action_risk:
+        from ..desktop_agent.formatter import format_desktop_action_risk
+
+        return format_desktop_action_risk(desktop_action_risk), "fast-command"
+
+    if normalized == "eva desktop action approvals":
+        from ..desktop_agent.formatter import format_desktop_action_approvals
+
+        return format_desktop_action_approvals(), "fast-command"
+
+    if normalized == "eva desktop dry run policy":
+        from ..desktop_agent.formatter import format_desktop_dry_run_policy
+
+        return format_desktop_dry_run_policy(), "fast-command"
+
+    if normalized == "eva desktop action readiness":
+        from ..desktop_agent.formatter import format_desktop_action_readiness
+
+        return format_desktop_action_readiness(), "fast-command"
+
+    desktop_risk_score = _after_prefix(original, ("eva desktop risk score ",))
+    if desktop_risk_score:
+        from ..desktop_agent.formatter import format_desktop_risk_score
+
+        return format_desktop_risk_score(desktop_risk_score), "fast-command"
+
+    desktop_risk_factors = _after_prefix(original, ("eva desktop risk factors ",))
+    if desktop_risk_factors:
+        from ..desktop_agent.formatter import format_desktop_risk_factors
+
+        return format_desktop_risk_factors(desktop_risk_factors), "fast-command"
+
+    desktop_approval_required = _after_prefix(original, ("eva desktop approval required ",))
+    if desktop_approval_required:
+        from ..desktop_agent.formatter import format_desktop_approval_required
+
+        return format_desktop_approval_required(desktop_approval_required), "fast-command"
+
+    if normalized == "eva desktop approval policy":
+        from ..desktop_agent.formatter import format_desktop_approval_policy
+
+        return format_desktop_approval_policy(), "fast-command"
+
+    if normalized == "eva desktop approval levels":
+        from ..desktop_agent.formatter import format_desktop_approval_levels
+
+        return format_desktop_approval_levels(), "fast-command"
+
+    desktop_approval_preview = _after_prefix(original, ("eva desktop approval preview ",))
+    if desktop_approval_preview:
+        from ..desktop_agent.formatter import format_desktop_approval_model_preview
+
+        return format_desktop_approval_model_preview(desktop_approval_preview), "fast-command"
+
+    desktop_confirmation_phrase = _after_prefix(original, ("eva desktop confirmation phrase ",))
+    if desktop_confirmation_phrase:
+        from ..desktop_agent.formatter import format_desktop_confirmation_phrase
+
+        return format_desktop_confirmation_phrase(desktop_confirmation_phrase), "fast-command"
+
+    if normalized == "eva desktop forbidden actions":
+        from ..desktop_agent.formatter import format_desktop_forbidden_actions
+
+        return format_desktop_forbidden_actions(), "fast-command"
+
+    if normalized == "eva desktop approval audit status":
+        from ..desktop_agent.formatter import format_desktop_approval_audit_status
+
+        return format_desktop_approval_audit_status(), "fast-command"
+
+    if normalized == "eva desktop approval readiness":
+        from ..desktop_agent.formatter import format_desktop_approval_model_readiness
+
+        return format_desktop_approval_model_readiness(), "fast-command"
+
+    if normalized == "eva desktop safety matrix":
+        from ..desktop_agent.formatter import format_desktop_safety_matrix
+
+        return format_desktop_safety_matrix(), "fast-command"
+
+    if normalized == "eva desktop high risk actions":
+        from ..desktop_agent.formatter import format_desktop_high_risk_actions
+
+        return format_desktop_high_risk_actions(), "fast-command"
+
+    if normalized == "eva desktop risk readiness":
+        from ..desktop_agent.formatter import format_desktop_risk_readiness
+
+        return format_desktop_risk_readiness(), "fast-command"
+
+    desktop_app_risk = _after_prefix(original, ("eva desktop app risk ",))
+    if desktop_app_risk:
+        from ..desktop_agent.formatter import format_desktop_app_risk
+
+        return format_desktop_app_risk(desktop_app_risk), "fast-command"
+
+    if normalized == "eva desktop readiness":
+        from ..desktop_agent.formatter import format_desktop_readiness
+
+        return format_desktop_readiness(), "fast-command"
+
+    if normalized == "eva desktop session status":
+        from ..desktop_agent.formatter import format_desktop_session_status
+
+        return format_desktop_session_status(), "fast-command"
+
+    if normalized == "eva desktop sessions":
+        from ..desktop_agent.formatter import format_desktop_sessions
+
+        return format_desktop_sessions(), "fast-command"
+
+    if normalized == "eva desktop session preview":
+        from ..desktop_agent.formatter import format_desktop_session_preview
+
+        return format_desktop_session_preview(), "fast-command"
+
+    if normalized == "eva desktop session latest":
+        from ..desktop_agent.formatter import format_desktop_session_latest
+
+        return format_desktop_session_latest(), "fast-command"
+
+    if normalized == "eva desktop session plan":
+        from ..desktop_agent.formatter import format_desktop_session_plan
+
+        return format_desktop_session_plan(), "fast-command"
+
+    if normalized == "eva desktop app status preview":
+        from ..desktop_agent.formatter import format_desktop_app_status_preview
+
+        return format_desktop_app_status_preview(), "fast-command"
+
+    if normalized == "eva desktop window status preview":
+        from ..desktop_agent.formatter import format_desktop_window_status_preview
+
+        return format_desktop_window_status_preview(), "fast-command"
+
+    if normalized == "eva desktop active context preview":
+        from ..desktop_agent.formatter import format_desktop_active_context_preview
+
+        return format_desktop_active_context_preview(), "fast-command"
+
+    if normalized == "eva desktop observation readiness":
+        from ..desktop_agent.formatter import format_desktop_observation_readiness
+
+        return format_desktop_observation_readiness(), "fast-command"
+
+    if normalized == "eva desktop screen policy":
+        from ..desktop_agent.formatter import format_desktop_screen_policy
+
+        return format_desktop_screen_policy(), "fast-command"
+
+    if normalized == "eva desktop screen observation policy":
+        from ..desktop_agent.formatter import format_desktop_screen_observation_policy
+
+        return format_desktop_screen_observation_policy(), "fast-command"
+
+    if normalized == "eva desktop sensitive screens":
+        from ..desktop_agent.formatter import format_desktop_sensitive_screens
+
+        return format_desktop_sensitive_screens(), "fast-command"
+
+    if normalized == "eva desktop screen redaction policy":
+        from ..desktop_agent.formatter import format_desktop_screen_redaction_policy
+
+        return format_desktop_screen_redaction_policy(), "fast-command"
+
+    if normalized == "eva desktop screen capture gate":
+        from ..desktop_agent.formatter import format_desktop_screen_capture_gate
+
+        return format_desktop_screen_capture_gate(), "fast-command"
+
+    if normalized == "eva desktop screen readiness":
+        from ..desktop_agent.formatter import format_desktop_screen_readiness
+
+        return format_desktop_screen_readiness(), "fast-command"
+
+    if normalized == "eva desktop observation policy":
+        from ..desktop_agent.formatter import format_desktop_observation_policy
+
+        return format_desktop_observation_policy(), "fast-command"
+
+    if normalized == "eva browser status":
+        from ..browser_agent.formatter import format_browser_status
+
+        return format_browser_status(), "fast-command"
+
+    if normalized == "eva browser policy":
+        from ..browser_agent.formatter import format_browser_policy
+
+        return format_browser_policy(), "fast-command"
+
+    if normalized == "eva browser blocked actions":
+        from ..browser_agent.formatter import format_browser_blocked_actions
+
+        return format_browser_blocked_actions(), "fast-command"
+
+    if normalized == "eva browser domain policy":
+        from ..browser_agent.formatter import format_browser_domain_policy
+
+        return format_browser_domain_policy(), "fast-command"
+
+    if normalized == "eva browser readiness":
+        from ..browser_agent.formatter import format_browser_readiness
+
+        return format_browser_readiness(), "fast-command"
+
+    if normalized == "eva browser session status":
+        from ..browser_agent.formatter import format_browser_session_status
+
+        return format_browser_session_status(), "fast-command"
+
+    if normalized == "eva browser sessions":
+        from ..browser_agent.formatter import format_browser_sessions
+
+        return format_browser_sessions(), "fast-command"
+
+    if normalized == "eva browser session preview":
+        from ..browser_agent.formatter import format_browser_session_preview
+
+        return format_browser_session_preview(), "fast-command"
+
+    if normalized == "eva browser session latest":
+        from ..browser_agent.formatter import format_browser_session_latest
+
+        return format_browser_session_latest(), "fast-command"
+
+    if normalized == "eva browser session plan":
+        from ..browser_agent.formatter import format_browser_session_plan
+
+        return format_browser_session_plan(), "fast-command"
+
+    if normalized == "eva browser page summary policy":
+        from ..browser_agent.formatter import format_browser_page_summary_policy
+
+        return format_browser_page_summary_policy(), "fast-command"
+
+    if normalized == "eva browser page summary preview":
+        from ..browser_agent.formatter import format_browser_page_summary_preview
+
+        return format_browser_page_summary_preview(), "fast-command"
+
+    if normalized == "eva browser dom summary policy":
+        from ..browser_agent.formatter import format_browser_dom_summary_policy
+
+        return format_browser_dom_summary_policy(), "fast-command"
+
+    if normalized == "eva browser text extraction policy":
+        from ..browser_agent.formatter import format_browser_text_extraction_policy
+
+        return format_browser_text_extraction_policy(), "fast-command"
+
+    if normalized == "eva browser observation readiness":
+        from ..browser_agent.formatter import format_browser_observation_readiness
+
+        return format_browser_observation_readiness(), "fast-command"
+
+    if normalized == "eva browser redaction policy":
+        from ..browser_agent.formatter import format_browser_redaction_policy
+
+        return format_browser_redaction_policy(), "fast-command"
+
+    browser_domain_check = _after_prefix(original, ("eva browser domain check ",))
+    if browser_domain_check:
+        from ..browser_agent.formatter import format_browser_domain_check
+
+        return format_browser_domain_check(browser_domain_check), "fast-command"
+
+    browser_site_risk = _after_prefix(original, ("eva browser site risk ",))
+    if browser_site_risk:
+        from ..browser_agent.formatter import format_browser_site_risk
+
+        return format_browser_site_risk(browser_site_risk), "fast-command"
+
+    if normalized == "eva browser domain rules":
+        from ..browser_agent.formatter import format_browser_domain_rules
+
+        return format_browser_domain_rules(), "fast-command"
+
+    if normalized == "eva browser sensitive sites":
+        from ..browser_agent.formatter import format_browser_sensitive_sites
+
+        return format_browser_sensitive_sites(), "fast-command"
+
+    if normalized == "eva browser domain approvals":
+        from ..browser_agent.formatter import format_browser_domain_approvals
+
+        return format_browser_domain_approvals(), "fast-command"
+
+    if normalized == "eva browser domain readiness":
+        from ..browser_agent.formatter import format_browser_domain_readiness
+
+        return format_browser_domain_readiness(), "fast-command"
+
+    if normalized == "eva browser read only readiness":
+        from ..browser_agent.formatter import format_browser_read_only_readiness
+
+        return format_browser_read_only_readiness(), "fast-command"
+
+    if normalized == "eva browser readiness proof":
+        from ..browser_agent.formatter import format_browser_readiness_proof
+
+        return format_browser_readiness_proof(), "fast-command"
+
+    if normalized == "eva browser safety proof":
+        from ..browser_agent.formatter import format_browser_safety_proof
+
+        return format_browser_safety_proof(), "fast-command"
+
+    if normalized == "eva browser readiness gaps":
+        from ..browser_agent.formatter import format_browser_readiness_gaps
+
+        return format_browser_readiness_gaps(), "fast-command"
+
+    if normalized == "eva browser locked status":
+        from ..browser_agent.formatter import format_browser_locked_status
+
+        return format_browser_locked_status(), "fast-command"
+
+    if normalized == "eva browser phase 13 proof":
+        from ..browser_agent.formatter import format_browser_phase13_proof
+
+        return format_browser_phase13_proof(), "fast-command"
+
+    if normalized == "eva browser phase 13 status":
+        from ..browser_agent.formatter import format_browser_phase13_status
+
+        return format_browser_phase13_status(), "fast-command"
+
+    if normalized == "eva browser phase 13 summary":
+        from ..browser_agent.formatter import format_browser_phase13_summary
+
+        return format_browser_phase13_summary(), "fast-command"
+
+    if normalized == "eva browser phase 13 limits":
+        from ..browser_agent.formatter import format_browser_phase13_limits
+
+        return format_browser_phase13_limits(), "fast-command"
+
+    if normalized == "eva browser phase 13 ready":
+        from ..browser_agent.formatter import format_browser_phase13_ready
+
+        return format_browser_phase13_ready(), "fast-command"
+
+    if normalized == "eva browser phase 13 final proof":
+        from ..browser_agent.formatter import format_browser_phase13_final_proof
+
+        return format_browser_phase13_final_proof(), "fast-command"
+
+    browser_dry_run = _after_prefix(original, ("eva browser action dry run ",))
+    if browser_dry_run:
+        from ..browser_agent.formatter import format_browser_action_dry_run
+
+        return format_browser_action_dry_run(browser_dry_run), "fast-command"
+
+    browser_action_plan = _after_prefix(original, ("eva browser action plan ",))
+    if browser_action_plan:
+        from ..browser_agent.formatter import format_browser_action_plan
+
+        return format_browser_action_plan(browser_action_plan), "fast-command"
+
+    browser_action_risk = _after_prefix(original, ("eva browser action risk ",))
+    if browser_action_risk:
+        from ..browser_agent.formatter import format_browser_action_risk
+
+        return format_browser_action_risk(browser_action_risk), "fast-command"
+
+    if normalized == "eva browser action approvals":
+        from ..browser_agent.formatter import format_browser_action_approvals
+
+        return format_browser_action_approvals(), "fast-command"
+
+    if normalized == "eva browser dry run policy":
+        from ..browser_agent.formatter import format_browser_dry_run_policy
+
+        return format_browser_dry_run_policy(), "fast-command"
+
+    if normalized == "eva browser action readiness":
+        from ..browser_agent.formatter import format_browser_action_readiness
+
+        return format_browser_action_readiness(), "fast-command"
+
+    browser_action = _after_prefix(original, ("eva browser action safety ",))
+    if browser_action:
+        from ..browser_agent.formatter import format_browser_action_safety
+
+        return format_browser_action_safety(browser_action), "fast-command"
+
+    if normalized == "eva ux status":
+        from ..core.ux_messages import format_ux_status
+
+        return format_ux_status(), "fast-command"
+
+    natural_route_goal = _after_prefix(original, ("eva natural route ", "eva authority decision "))
+    if natural_route_goal:
+        from ..authority.formatter import format_authority_decision
+        from ..core.natural_router import route_natural_request
+
+        route = route_natural_request(natural_route_goal.strip())
+        decision = _authority_decision_from_natural_route(route)
+        return "\n\n".join(
+            [
+                "Natural route preview",
+                f"Intent: {route.intent}",
+                f"Suggested command: {route.suggested_command or 'none'}",
+                format_authority_decision(decision),
+            ]
+        ), "fast-command"
+
+    if normalized in {"eva verify all", "eva all verifiers"}:
+        return "Use `scripts/verify_eva_all.py` from the terminal to run the local verifier sweep. Eva did not start the sweep from chat.", "fast-command"
 
     execute = _handle_eva_v2_execute_command(normalized, original)
     if execute:
@@ -1045,6 +3675,30 @@ def maybe_handle_fast_command(
 
         return format_agent_dry_run_for_goal(agent_dry_run_goal.strip()), "fast-command"
 
+    agent_review_goal = _after_prefix(original, ("eva agents review plan ", "eva agent team review "))
+    if agent_review_goal:
+        from ..agents.team_review import format_agent_team_review, review_plan_with_agent_team
+        from ..planner.decomposer import create_task_plan
+
+        plan = create_task_plan(agent_review_goal.strip())
+        return format_agent_team_review(review_plan_with_agent_team(plan)), "fast-command"
+
+    agent_coverage_goal = _after_prefix(original, ("eva agents coverage ",))
+    if agent_coverage_goal:
+        from ..agents.delegation import dry_run_plan_with_agents
+        from ..agents.quality import evaluate_plan_agent_coverage, format_agent_coverage_report
+        from ..planner.decomposer import create_task_plan
+
+        plan = create_task_plan(agent_coverage_goal.strip())
+        dry_run = dry_run_plan_with_agents(plan, include_quality=False)
+        return format_agent_coverage_report(evaluate_plan_agent_coverage(plan, dry_run.responses)), "fast-command"
+
+    agent_validate_goal = _after_prefix(original, ("eva agents validate plan ",))
+    if agent_validate_goal:
+        from ..agents.delegation import format_agent_dry_run_for_goal
+
+        return format_agent_dry_run_for_goal(agent_validate_goal.strip()), "fast-command"
+
     agent_capabilities_name = _after_prefix(original, ("eva agent capabilities ",))
     if agent_capabilities_name:
         from ..agents.registry import format_agent_capabilities
@@ -1065,6 +3719,356 @@ def maybe_handle_fast_command(
         from ..agents.registry import format_agent_detail
 
         return format_agent_detail(agent_detail_name.strip()), "fast-command"
+
+    if normalized == "eva file status":
+        from ..file_agent.status import format_file_agent_status
+
+        return format_file_agent_status(), "fast-command"
+
+    if normalized == "eva file approval status":
+        from ..file_agent.approval_ledger import format_file_approval_ledger_status
+
+        return format_file_approval_ledger_status(), "fast-command"
+
+    if normalized == "eva file apply executor status":
+        from ..file_agent.apply_executor import format_apply_executor_status
+
+        return format_apply_executor_status(), "fast-command"
+
+    if normalized == "eva file real apply status":
+        from ..file_agent.real_apply_executor import format_real_apply_status
+
+        return format_real_apply_status(), "fast-command"
+
+    if normalized == "eva file real apply policy":
+        from ..file_agent.real_apply import format_real_apply_policy
+
+        return format_real_apply_policy(), "fast-command"
+
+    real_eligibility_id = _after_prefix(original, ("eva file real apply eligibility ",))
+    if real_eligibility_id:
+        from ..file_agent.real_apply import evaluate_real_apply_eligibility, format_real_apply_eligibility
+
+        return format_real_apply_eligibility(evaluate_real_apply_eligibility(real_eligibility_id.strip())), "fast-command"
+
+    real_verify_id = _after_prefix(original, ("eva file approval real verify ", "eva file real create verify "))
+    if real_verify_id:
+        from ..file_agent.real_apply import format_real_apply_verification, verify_real_text_file_apply
+
+        return format_real_apply_verification(verify_real_text_file_apply(real_verify_id.strip())), "fast-command"
+
+    real_rollback_payload = _after_prefix(original, ("eva file approval real rollback ", "eva file real create rollback "))
+    if real_rollback_payload:
+        from ..file_agent.real_apply import format_real_apply_rollback, rollback_real_text_file_apply
+
+        marker = " confirm rollback real create "
+        if marker not in real_rollback_payload:
+            approval_id = real_rollback_payload.strip()
+            return f"Usage: eva file approval real rollback <approval_id> confirm rollback real create <approval_id>\nExact phrase required: confirm rollback real create {approval_id}", "fast-command"
+        approval_id, phrase_id = real_rollback_payload.split(marker, 1)
+        phrase = f"confirm rollback real create {phrase_id.strip()}"
+        return format_real_apply_rollback(rollback_real_text_file_apply(approval_id.strip(), phrase)), "fast-command"
+
+    real_create_payload = _after_prefix(original, ("eva file approval real create ",))
+    if real_create_payload:
+        from ..file_agent.real_apply import build_real_apply_request_from_approval, create_real_text_file_from_approval, format_real_apply_result
+        from ..file_agent.real_apply_executor import format_real_create_request
+
+        marker = " confirm real create "
+        if marker not in real_create_payload:
+            approval_id = real_create_payload.strip()
+            request = build_real_apply_request_from_approval(approval_id, confirmation_phrase="")
+            return format_real_create_request(request), "fast-command"
+        approval_id, phrase_id = real_create_payload.split(marker, 1)
+        phrase = f"confirm real create {phrase_id.strip()}"
+        request = build_real_apply_request_from_approval(approval_id.strip(), confirmation_phrase=phrase)
+        if not request.allowed:
+            return format_real_create_request(request), "fast-command"
+        return format_real_apply_result(create_real_text_file_from_approval(approval_id.strip(), phrase)), "fast-command"
+
+    if normalized == "eva file apply sandbox policy":
+        from ..file_agent.apply_executor import format_apply_executor_status
+
+        return "\n".join(
+            [
+                "FileAgent sandbox apply policy",
+                "",
+                "Only approved FileAgent metadata can be applied inside the sandbox harness.",
+                "Sandbox backups, verification, and rollback stay under ignored runtime storage.",
+                "Real project/user files are not created, modified, backed up, restored, or applied.",
+                "",
+                format_apply_executor_status(),
+            ]
+        ), "fast-command"
+
+    approval_create = _parse_between(original, "eva file approval request create ", " text ")
+    if approval_create:
+        from ..file_agent.approval_ledger import create_file_approval_request, format_file_approval_request
+        from ..file_agent.draft_preview import create_file_draft_preview
+
+        path_text, content = approval_create
+        return format_file_approval_request(create_file_approval_request(create_file_draft_preview(path_text.strip(), content))), "fast-command"
+
+    approval_append = _parse_between(original, "eva file approval request append ", " text ")
+    if approval_append:
+        from ..file_agent.approval_ledger import create_file_approval_request, format_file_approval_request
+        from ..file_agent.draft_preview import create_append_preview
+
+        path_text, content = approval_append
+        return format_file_approval_request(create_file_approval_request(create_append_preview(path_text.strip(), content))), "fast-command"
+
+    approval_replace = _parse_replace_with_prefix(original, "eva file approval request replace ")
+    if approval_replace:
+        from ..file_agent.approval_ledger import create_file_approval_request, format_file_approval_request
+        from ..file_agent.draft_preview import create_text_replacement_preview
+
+        path_text, old_text, new_text = approval_replace
+        return format_file_approval_request(create_file_approval_request(create_text_replacement_preview(path_text.strip(), old_text, new_text))), "fast-command"
+
+    if normalized == "eva file approvals pending":
+        from ..file_agent.approval_ledger import format_file_approval_list, list_file_approval_requests
+
+        return format_file_approval_list(list_file_approval_requests(status="pending")), "fast-command"
+
+    if normalized == "eva file approvals expire":
+        from ..file_agent.approval_ledger import expire_old_file_approvals, format_file_approval_ledger_status
+
+        count = expire_old_file_approvals()
+        return f"Expired {count} old FileAgent approval request(s).\n\n{format_file_approval_ledger_status()}", "fast-command"
+
+    approval_events_id = _after_prefix(original, ("eva file approval events ",))
+    if approval_events_id:
+        from ..file_agent.approval_ledger import format_file_approval_events
+
+        return format_file_approval_events(approval_events_id.strip()), "fast-command"
+
+    sandbox_apply_id = _after_prefix(original, ("eva file approval sandbox apply ",))
+    if sandbox_apply_id:
+        from ..file_agent.apply_executor import apply_draft_to_sandbox, build_apply_request_from_approval, format_apply_result, verify_sandbox_apply
+
+        request = build_apply_request_from_approval(sandbox_apply_id.strip())
+        result = apply_draft_to_sandbox(request)
+        verification = verify_sandbox_apply(request, result) if result.ok else None
+        text = format_apply_result(result)
+        if verification is not None:
+            from ..file_agent.apply_executor import format_verification_result
+
+            text = f"{text}\n\n{format_verification_result(verification)}"
+        return text, "fast-command"
+
+    sandbox_verify_id = _after_prefix(original, ("eva file approval sandbox verify ",))
+    if sandbox_verify_id:
+        from ..file_agent.apply_executor import build_apply_request_from_approval, format_verification_result, verify_sandbox_apply
+
+        request = build_apply_request_from_approval(sandbox_verify_id.strip())
+        return format_verification_result(verify_sandbox_apply(request)), "fast-command"
+
+    sandbox_rollback_id = _after_prefix(original, ("eva file approval sandbox rollback ",))
+    if sandbox_rollback_id:
+        from ..file_agent.apply_executor import apply_draft_to_sandbox, build_apply_request_from_approval, format_rollback_result, rollback_sandbox_apply
+
+        request = build_apply_request_from_approval(sandbox_rollback_id.strip())
+        result = apply_draft_to_sandbox(request)
+        return format_rollback_result(rollback_sandbox_apply(result)), "fast-command"
+
+    approval_approve_payload = _after_prefix(original, ("eva file approval approve ",))
+    if approval_approve_payload:
+        from ..file_agent.approval_ledger import approve_file_approval_request, format_file_approval_request
+
+        marker = " confirm "
+        if marker not in approval_approve_payload:
+            return "Usage: eva file approval approve <approval_id> confirm <exact confirmation phrase>\nNo file was created, modified, backed up, restored, or applied.", "fast-command"
+        approval_id, phrase = approval_approve_payload.split(marker, 1)
+        return format_file_approval_request(approve_file_approval_request(approval_id.strip(), phrase.strip())), "fast-command"
+
+    approval_deny_id = _after_prefix(original, ("eva file approval deny ",))
+    if approval_deny_id:
+        from ..file_agent.approval_ledger import deny_file_approval_request, format_file_approval_request
+
+        return format_file_approval_request(deny_file_approval_request(approval_deny_id.strip())), "fast-command"
+
+    approval_cancel_id = _after_prefix(original, ("eva file approval cancel ",))
+    if approval_cancel_id:
+        from ..file_agent.approval_ledger import cancel_file_approval_request, format_file_approval_request
+
+        return format_file_approval_request(cancel_file_approval_request(approval_cancel_id.strip())), "fast-command"
+
+    approval_view_id = _after_prefix(original, ("eva file approval ",))
+    if approval_view_id and not approval_view_id.lower().startswith(("request ", "approve ", "deny ", "cancel ", "events ", "sandbox ", "status")):
+        from ..file_agent.approval_ledger import format_file_approval_request, get_file_approval_request
+
+        return format_file_approval_request(get_file_approval_request(approval_view_id.strip())), "fast-command"
+
+    if normalized == "eva file apply policy":
+        from ..file_agent.write_safety import format_write_policy
+
+        return format_write_policy(), "fast-command"
+
+    apply_create = _parse_between(original, "eva file apply readiness create ", " text ")
+    if apply_create:
+        from ..file_agent.draft_preview import create_file_draft_preview
+        from ..file_agent.write_safety import format_apply_readiness_report
+
+        path_text, content = apply_create
+        return format_apply_readiness_report(create_file_draft_preview(path_text.strip(), content)), "fast-command"
+
+    apply_append = _parse_between(original, "eva file apply readiness append ", " text ")
+    if apply_append:
+        from ..file_agent.draft_preview import create_append_preview
+        from ..file_agent.write_safety import format_apply_readiness_report
+
+        path_text, content = apply_append
+        return format_apply_readiness_report(create_append_preview(path_text.strip(), content)), "fast-command"
+
+    apply_replace = _parse_replace_with_prefix(original, "eva file apply readiness replace ")
+    if apply_replace:
+        from ..file_agent.draft_preview import create_text_replacement_preview
+        from ..file_agent.write_safety import format_apply_readiness_report
+
+        path_text, old_text, new_text = apply_replace
+        return format_apply_readiness_report(create_text_replacement_preview(path_text.strip(), old_text, new_text)), "fast-command"
+
+    write_safety_path = _after_prefix(original, ("eva file write safety ",))
+    if write_safety_path:
+        from ..file_agent.write_safety import format_write_policy
+
+        return format_write_policy(write_safety_path.strip()), "fast-command"
+
+    rollback_path = _after_prefix(original, ("eva file rollback plan ",))
+    if rollback_path:
+        from ..file_agent.draft_preview import create_append_preview
+        from ..file_agent.write_safety import build_rollback_plan, format_rollback_plan
+
+        return format_rollback_plan(build_rollback_plan(create_append_preview(rollback_path.strip(), "future change placeholder"))), "fast-command"
+
+    draft_create = _parse_between(original, "eva file draft create ", " text ")
+    if draft_create:
+        from ..file_agent.draft_preview import create_file_draft_preview, format_draft_preview
+
+        path_text, content = draft_create
+        return format_draft_preview(create_file_draft_preview(path_text.strip(), content)), "fast-command"
+
+    draft_append = _parse_between(original, "eva file draft append ", " text ")
+    if draft_append:
+        from ..file_agent.draft_preview import create_append_preview, format_draft_preview
+
+        path_text, content = draft_append
+        return format_draft_preview(create_append_preview(path_text.strip(), content)), "fast-command"
+
+    draft_replace = _parse_replace_draft(original)
+    if draft_replace:
+        from ..file_agent.draft_preview import create_text_replacement_preview, format_draft_preview
+
+        path_text, old_text, new_text = draft_replace
+        return format_draft_preview(create_text_replacement_preview(path_text.strip(), old_text, new_text)), "fast-command"
+
+    draft_diff = _parse_between(original, "eva file draft diff ", " text ")
+    if draft_diff:
+        from ..file_agent.draft_preview import create_unified_diff_preview, format_draft_preview
+
+        path_text, proposed = draft_diff
+        return format_draft_preview(create_unified_diff_preview(path_text.strip(), proposed)), "fast-command"
+
+    readme_topic = _after_prefix(original, ("eva draft readme section ",))
+    if readme_topic:
+        from ..file_agent.draft_generators import draft_readme_section
+
+        return draft_readme_section(readme_topic.strip()), "fast-command"
+
+    if normalized == "eva draft project summary":
+        from ..file_agent.draft_generators import draft_project_summary
+        from ..file_agent.project_inventory import build_project_inventory
+
+        return draft_project_summary(build_project_inventory(".")), "fast-command"
+
+    report_title = _after_prefix(original, ("eva draft report outline ",))
+    if report_title:
+        from ..file_agent.draft_generators import draft_report_outline
+
+        return draft_report_outline(report_title.strip()), "fast-command"
+
+    if normalized == "eva draft project todo":
+        from ..file_agent.draft_generators import draft_todo_list_from_project_inventory
+        from ..file_agent.project_inventory import build_project_inventory
+
+        return draft_todo_list_from_project_inventory(build_project_inventory(".")), "fast-command"
+
+    file_understand_path = _after_prefix(original, ("eva file understand ", "eva file summarize ", "eva file summarise "))
+    if file_understand_path:
+        from ..file_agent.formatter import format_file_understanding
+        from ..file_agent.inspector import understand_file
+
+        return format_file_understanding(understand_file(file_understand_path.strip())), "fast-command"
+
+    project_inventory_path = _after_prefix(original, ("eva project inventory ",))
+    if normalized == "eva project inventory" or project_inventory_path:
+        from ..file_agent.formatter import format_project_inventory_report
+        from ..file_agent.project_inventory import build_project_inventory
+
+        return format_project_inventory_report(build_project_inventory(project_inventory_path.strip() if project_inventory_path else ".")), "fast-command"
+
+    project_explain_path = _after_prefix(original, ("eva project explain ",))
+    if normalized == "eva project explain" or project_explain_path:
+        from ..file_agent.formatter import format_project_explanation
+        from ..file_agent.project_inventory import build_project_inventory
+
+        return format_project_explanation(build_project_inventory(project_explain_path.strip() if project_explain_path else ".")), "fast-command"
+
+    project_missing_path = _after_prefix(original, ("eva project missing ",))
+    if normalized == "eva project missing" or project_missing_path:
+        from ..file_agent.formatter import format_project_missing
+        from ..file_agent.project_inventory import build_project_inventory
+
+        return format_project_missing(build_project_inventory(project_missing_path.strip() if project_missing_path else ".")), "fast-command"
+
+    project_key_files_path = _after_prefix(original, ("eva project key files ",))
+    if normalized == "eva project key files" or project_key_files_path:
+        from ..file_agent.formatter import format_project_key_files
+        from ..file_agent.project_inventory import build_project_inventory
+
+        return format_project_key_files(build_project_inventory(project_key_files_path.strip() if project_key_files_path else ".")), "fast-command"
+
+    project_dependencies_path = _after_prefix(original, ("eva project dependencies ",))
+    if normalized == "eva project dependencies" or project_dependencies_path:
+        from ..file_agent.formatter import format_project_dependencies
+        from ..file_agent.project_inventory import build_project_inventory
+
+        return format_project_dependencies(build_project_inventory(project_dependencies_path.strip() if project_dependencies_path else ".")), "fast-command"
+
+    file_inspect_path = _after_prefix(original, ("eva file inspect ", "eva file explain "))
+    if file_inspect_path:
+        from ..file_agent.formatter import format_path_inspection
+        from ..file_agent.inspector import inspect_path
+
+        return format_path_inspection(inspect_path(file_inspect_path.strip())), "fast-command"
+
+    folder_inspect_path = _after_prefix(original, ("eva folder inspect ",))
+    if folder_inspect_path:
+        from ..file_agent.formatter import format_folder_inspection
+        from ..file_agent.inspector import inspect_folder
+
+        return format_folder_inspection(inspect_folder(folder_inspect_path.strip())), "fast-command"
+
+    file_search_query = _after_prefix(original, ("eva file search ",))
+    if file_search_query:
+        from ..file_agent.formatter import format_file_search_results
+        from ..file_agent.search import search_files_by_name
+
+        return format_file_search_results(search_files_by_name(file_search_query.strip())), "fast-command"
+
+    file_preview_path = _after_prefix(original, ("eva file preview ",))
+    if file_preview_path:
+        from ..file_agent.formatter import format_text_preview
+        from ..file_agent.inspector import preview_text_file
+
+        return format_text_preview(preview_text_file(file_preview_path.strip())), "fast-command"
+
+    project_structure_path = _after_prefix(original, ("eva project structure ",))
+    if normalized == "eva project structure" or project_structure_path:
+        from ..file_agent.formatter import format_project_structure
+        from ..file_agent.inspector import explain_project_structure
+
+        return format_project_structure(explain_project_structure(project_structure_path.strip() if project_structure_path else ".")), "fast-command"
 
     if normalized == "eva public checklist":
         from ..release.status import format_public_release_checklist

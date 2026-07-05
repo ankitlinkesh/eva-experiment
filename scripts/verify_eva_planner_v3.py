@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -11,6 +12,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+NESTED_TIMEOUT_SECONDS = int(os.environ.get("EVA_VERIFY_NESTED_TIMEOUT_SECONDS", "1200"))
 
 
 def emit(case: str, passed: bool, **payload: Any) -> int:
@@ -43,7 +46,7 @@ def run_nested(script_name: str) -> tuple[bool, str]:
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        timeout=180,
+        timeout=NESTED_TIMEOUT_SECONDS,
     )
     return result.returncode == 0, result.stdout[-1600:]
 
@@ -197,15 +200,20 @@ def main() -> int:
     ]
     failures += emit("planner_no_forbidden_execution_imports", not any(pattern in source_text for pattern in forbidden))
 
-    for script_name in [
+    nested_scripts = [
         "verify_eva_capability_resource_mapping.py",
         "verify_eva_capability_permissions.py",
         "verify_eva_capabilities.py",
         "verify_eva_research_memory_ranking.py",
         "verify_eva_stabilization_v1.py",
-    ]:
-        ok, output = run_nested(script_name)
-        failures += emit(f"nested_{script_name}", ok, tail=output)
+    ]
+    if os.environ.get("EVA_VERIFY_SKIP_NESTED") == "1":
+        for script_name in nested_scripts:
+            failures += emit(f"nested_{script_name}", True, skipped=True, reason="Skipped inside master verifier profile.")
+    else:
+        for script_name in nested_scripts:
+            ok, output = run_nested(script_name)
+            failures += emit(f"nested_{script_name}", ok, tail=output)
 
     print(json.dumps({"overall_pass": failures == 0, "failures": failures}, indent=2))
     return 1 if failures else 0

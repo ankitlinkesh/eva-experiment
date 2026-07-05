@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api.routes import router
 from .api.websocket import websocket_router
+from .control_center.routes import get_control_center_routes
 from .core.config import load_project_env, load_settings
 from .memory.store import MemoryStore
 
@@ -21,6 +22,7 @@ def create_app() -> FastAPI:
     app.state.memory = MemoryStore(ROOT / "data" / "eva.sqlite3")
     app.include_router(router, prefix="/api")
     app.include_router(websocket_router)
+    app.include_router(get_control_center_routes())
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
     return app
 

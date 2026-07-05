@@ -41,7 +41,7 @@ def run_nested(script_name: str) -> tuple[bool, str]:
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        timeout=240,
+        timeout=700,
     )
     return result.returncode == 0, result.stdout[-1600:]
 

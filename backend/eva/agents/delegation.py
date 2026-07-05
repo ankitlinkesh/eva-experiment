@@ -16,6 +16,22 @@ class AgentDryRunResult:
     user_goal: str
     responses: list[EvaAgentResponse] = field(default_factory=list)
     summary: str = "Agent dry-run completed. No task was executed."
+    validation: AgentDryRunValidation | None = None
+    coverage_score: float | None = None
+    team_review_summary: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    model_dump = as_dict
+
+
+@schema_dataclass
+class AgentDryRunValidation:
+    plan_id: str
+    passed: bool
+    warnings: list[str] = field(default_factory=list)
+    blockers: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -65,9 +81,43 @@ def dry_run_step_with_agent(plan: EvaTaskPlan, step: EvaTaskStep) -> EvaAgentRes
     return response
 
 
-def dry_run_plan_with_agents(plan: EvaTaskPlan) -> AgentDryRunResult:
+def dry_run_plan_with_agents(plan: EvaTaskPlan, include_quality: bool = True) -> AgentDryRunResult:
     responses = [dry_run_step_with_agent(plan, step) for step in plan.steps]
-    return AgentDryRunResult(plan_id=plan.plan_id, user_goal=plan.user_goal or plan.normalized_goal, responses=responses)
+    validation = validate_agent_dry_run_results(plan, responses)
+    result = AgentDryRunResult(
+        plan_id=plan.plan_id,
+        user_goal=plan.user_goal or plan.normalized_goal,
+        responses=responses,
+        validation=validation,
+    )
+    if include_quality:
+        from .quality import evaluate_plan_agent_coverage
+        from .team_review import review_plan_with_agent_team
+
+        coverage = evaluate_plan_agent_coverage(plan, responses)
+        result.coverage_score = coverage.coverage_score
+        review = review_plan_with_agent_team(plan)
+        result.team_review_summary = review.recommended_next_action
+    return result
+
+
+def validate_agent_dry_run_results(plan: EvaTaskPlan, dry_run_results: list[EvaAgentResponse]) -> AgentDryRunValidation:
+    warnings: list[str] = []
+    blockers: list[str] = []
+    by_step = {response.task_step_id: response for response in dry_run_results}
+    for step in plan.steps:
+        response = by_step.get(step.step_id)
+        if not response:
+            blockers.append(f"{step.step_id}: missing dry-run result.")
+            continue
+        if response.status == "executed":
+            blockers.append(f"{step.step_id}: dry-run result claimed execution.")
+        if response.agent_name in {"BrowserAgent", "DesktopAgent"} and response.status == "executed":
+            blockers.append(f"{step.step_id}: visible-control agent must remain dry-run only.")
+        if step.permission_status in {"confirmation_required", "override_required", "blocked"}:
+            if response.required_permission not in {"confirmation_required", "override_required", "blocked"}:
+                warnings.append(f"{step.step_id}: permission-gated step lacks a matching dry-run permission marker.")
+    return AgentDryRunValidation(plan_id=plan.plan_id, passed=not blockers, warnings=warnings, blockers=blockers)
 
 
 def format_agent_dry_run_result(result: AgentDryRunResult) -> str:
@@ -88,6 +138,19 @@ def format_agent_dry_run_result(result: AgentDryRunResult) -> str:
                 f"   Would do: {response.summary}",
             ]
         )
+    if result.validation:
+        lines.extend(["", "Validation:"])
+        lines.append("Passed: yes" if result.validation.passed else "Passed: no")
+        if result.validation.warnings:
+            lines.append("Warnings:")
+            lines.extend(f"- {warning}" for warning in result.validation.warnings[:5])
+        if result.validation.blockers:
+            lines.append("Blockers:")
+            lines.extend(f"- {blocker}" for blocker in result.validation.blockers[:5])
+    if result.coverage_score is not None:
+        lines.extend(["", f"Coverage score: {result.coverage_score:.2f}"])
+    if result.team_review_summary:
+        lines.extend(["", "Team review:", result.team_review_summary])
     lines.extend(["", "Execution:", "No task was executed. This was an Agent Framework v1 dry-run only."])
     return "\n".join(lines)
 
@@ -96,4 +159,3 @@ def format_agent_dry_run_for_goal(goal_text: str) -> str:
     plan = create_task_plan(goal_text)
     result = dry_run_plan_with_agents(plan)
     return format_agent_dry_run_result(result)
-

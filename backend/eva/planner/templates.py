@@ -117,6 +117,8 @@ def get_plan_templates() -> list[PlanTemplate]:
 
 def get_template_for_goal(goal_text: str) -> PlanTemplate | None:
     text = _normalize(goal_text)
+    if any(term in text for term in ("plan desktop actions", "desktop action plan", "dry run desktop action", "approval is needed", "desktop risk score", "score the risk", "how risky is")):
+        return None
     best: PlanTemplate | None = None
     best_hits = 0
     for template in get_plan_templates():
@@ -254,4 +256,3 @@ def _risk_for_step(step_type: str, permission: str) -> str:
     if permission == "confirmation_required" or step_type in {"local_write", "browser_open"}:
         return "medium"
     return "low"
-

@@ -126,13 +126,18 @@ def main() -> int:
     failures += emit("docs_wording_check_runs", bool(check_docs_public_wording(ROOT).checks))
     failures += emit("sample_data_check_runs", bool(check_sample_data_public_safe(ROOT).checks))
 
-    for script_name in (
+    nested_scripts = (
         "verify_eva_public_release.py",
         "verify_eva_research_memory_help.py",
         "verify_eva_resource_registry.py",
         "verify_eva_stabilization_v1.py",
-    ):
-        failures += emit(f"nested_{script_name}", run_verifier(script_name))
+    )
+    if os.environ.get("EVA_VERIFY_SKIP_NESTED") == "1":
+        for script_name in nested_scripts:
+            failures += emit(f"nested_{script_name}", True, skipped=True, reason="Skipped inside master verifier profile.")
+    else:
+        for script_name in nested_scripts:
+            failures += emit(f"nested_{script_name}", run_verifier(script_name))
 
     print(json.dumps({"overall_pass": failures == 0, "failures": failures}, indent=2))
     return 0 if failures == 0 else 1

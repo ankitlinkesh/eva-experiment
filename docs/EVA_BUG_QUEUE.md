@@ -16,6 +16,17 @@ Known intentional limitations after Phases 1-6:
 - WhatsApp/message send, file write/edit/delete, arbitrary shell, and raw desktop clicks remain unavailable or refused.
 - Safe Code Index v2 is metadata-only and lexical; it is not semantic vector search.
 
+Phase 28 regression boundary:
+
+- CodingAgent is preview/report/status only. Source edits, patch application, shell/test/package/git execution, arbitrary file access, live provider calls, and tool execution remain intentionally unavailable.
+- Coding plans, reviews, test plans, risk reviews, and handoffs must remain deterministic previews, and Phase 12L remains the only real file write path.
+
+Phase 29 regression boundary:
+
+- Public demo/release commands are documentation/report/status/profile only and must never publish, upload, package, commit, tag, push, or execute external actions.
+- Public-facing output must remain honest about locked browser/desktop control, preview-only CodingAgent behavior, local/mock News and Voice foundations, and checkout-specific verifier evidence.
+- Phase 12L remains the only real file write path; Release Candidate Hardening or commit planning requires separate user approval.
+
 ## EVA-001: Architecture answer still needs more grounding
 
 - command: `explain your full architecture`

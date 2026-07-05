@@ -102,7 +102,7 @@ def format_public_release_hardening_status(repo_root: str | Path | None = None) 
         [
             "",
             "Audit scope:",
-            "Repo files only. No network, package install, MCP, Playwright, PyAutoGUI, secret-file read, or secret printing was performed.",
+            "Repo files only. No network, dependency setup, MCP, Playwright, PyAutoGUI, secret-file read, or secret printing was performed.",
         ]
     )
     return "\n".join(lines)

@@ -270,7 +270,7 @@ def main() -> int:
     failures += emit("outputs_no_internal_absolute_paths", "C:\\" not in outputs and "/tmp/" not in outputs)
     failures += emit("outputs_no_raw_vectors", "raw vector" not in outputs.lower() and "vector_json" not in outputs.lower())
 
-    for script_name in [
+    nested_scripts = [
         "verify_eva_research_memory_retrieval.py",
         "verify_eva_research_memory_quality.py",
         "verify_eva_research_memory_vectors.py",
@@ -278,9 +278,14 @@ def main() -> int:
         "verify_eva_capabilities.py",
         "verify_eva_capability_permissions.py",
         "verify_eva_stabilization_v1.py",
-    ]:
-        ok, tail = run_nested(script_name)
-        failures += emit(f"nested_{script_name}", ok, tail=tail)
+    ]
+    if os.environ.get("EVA_VERIFY_SKIP_NESTED") == "1":
+        for script_name in nested_scripts:
+            failures += emit(f"nested_{script_name}", True, skipped=True, reason="Skipped inside master verifier profile.")
+    else:
+        for script_name in nested_scripts:
+            ok, tail = run_nested(script_name)
+            failures += emit(f"nested_{script_name}", ok, tail=tail)
 
     print(json.dumps({"overall_pass": failures == 0, "failures": failures}, indent=2))
     return 0 if failures == 0 else 1

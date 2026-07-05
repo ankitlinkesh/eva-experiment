@@ -45,7 +45,7 @@ def format_public_doctor() -> str:
         [
             "",
             "Doctor scope:",
-            "No network calls, package installs, .env.local reads, browser execution, desktop execution, or API-key validation were performed.",
+            "No network calls, dependency setup, .env.local reads, browser execution, desktop execution, or API-key validation were performed.",
         ]
     )
     return "\n".join(lines)

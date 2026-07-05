@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -251,14 +252,19 @@ def main() -> int:
     ]
     failures += emit("no_forbidden_enablement_added", not any(pattern in source_text for pattern in forbidden_source_patterns))
 
-    for script_name in [
+    nested_scripts = [
         "verify_eva_capabilities.py",
         "verify_eva_resource_registry.py",
         "verify_eva_public_release_hardening.py",
         "verify_eva_stabilization_v1.py",
-    ]:
-        ok, output = run_nested(script_name)
-        failures += emit(f"nested_{script_name}", ok, tail=output)
+    ]
+    if os.environ.get("EVA_VERIFY_SKIP_NESTED") == "1":
+        for script_name in nested_scripts:
+            failures += emit(f"nested_{script_name}", True, skipped=True, reason="Skipped inside master verifier profile.")
+    else:
+        for script_name in nested_scripts:
+            ok, output = run_nested(script_name)
+            failures += emit(f"nested_{script_name}", ok, tail=output)
 
     print(json.dumps({"overall_pass": failures == 0, "failures": failures}, indent=2))
     return 1 if failures else 0

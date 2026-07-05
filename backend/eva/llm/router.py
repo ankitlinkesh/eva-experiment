@@ -28,6 +28,16 @@ PROVIDER_CLASSES = {
 }
 
 
+def preview_llm_route(request: str):
+    """Return Phase 15A metadata only; never invokes the legacy completion path."""
+    from .models import LLMDegradedMode, LLMProviderName, LLMRouteDecision, LLMRouteRequestPreview
+    from .routing_policy import get_fallback_policy
+
+    preview = LLMRouteRequestPreview(str(request or "").strip() or "No request supplied.")
+    fallback = get_fallback_policy()
+    return LLMRouteDecision(LLMProviderName.MOCK, fallback.order, False, LLMDegradedMode.MOCK_ONLY, f"Route preview for: {preview.request}. Phase 15A never calls a provider.")
+
+
 def llm_mode() -> str:
     mode = os.environ.get("EVA_LLM_MODE", "auto").strip().lower()
     return mode if mode in LLM_MODES else "auto"

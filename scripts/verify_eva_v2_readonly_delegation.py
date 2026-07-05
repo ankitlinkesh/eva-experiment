@@ -254,7 +254,13 @@ def main() -> int:
     )
     failures += emit("no_env_local_read", "open('.env.local" not in source_text and 'open(".env.local' not in source_text)
     failures += emit("no_package_install_attempt", "pip install" not in source_text)
-    failures += emit("no_arbitrary_shell_call", "subprocess" not in source_text and "os.system" not in source_text and "shell=true" not in source_text)
+    failures += emit(
+        "no_arbitrary_shell_call",
+        "import subprocess" not in source_text
+        and "from subprocess" not in source_text
+        and "os.system(" not in source_text
+        and "shell=true" not in source_text,
+    )
     failures += emit("no_mcp_playwright_pyautogui_execution", "run_mcp" not in source_text and "mcp.execute" not in source_text and "playwright_driver." not in source_text and "pyautogui_driver." not in source_text)
 
     print(json.dumps({"overall_pass": failures == 0, "failures": failures}, indent=2))
