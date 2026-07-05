@@ -9,7 +9,7 @@ def collect_control_center_status() -> ControlCenterStatus:
     warnings: list[str] = []
     return ControlCenterStatus(
         app_name="Eva Control Center",
-        phase="Phase 29 Public Demo / Release",
+        phase="Phase 30 Release Candidate Hardening / Commit Planning",
         authority_summary=_authority_summary(warnings),
         natural_router_summary=_natural_router_summary(),
         llm_router_summary=_llm_router_summary(warnings),
@@ -29,6 +29,7 @@ def collect_control_center_status() -> ControlCenterStatus:
         news_dashboard_summary=_news_dashboard_summary(warnings),
         coding_agent_summary=_coding_agent_summary(warnings),
         release_demo_summary=_release_demo_summary(warnings),
+        release_candidate_summary=_release_candidate_summary(warnings),
         file_agent_summary=_file_agent_summary(warnings),
         approval_summary=_approval_summary(warnings),
         sandbox_apply_summary=_sandbox_apply_summary(warnings),
@@ -489,6 +490,34 @@ def _release_demo_summary(warnings: list[str]) -> dict[str, object]:
         return unavailable_summary(
             "Public Demo / Release",
             "Release demo summary unavailable.",
+        )
+
+
+def _release_candidate_summary(warnings: list[str]) -> dict[str, object]:
+    try:
+        from ..release_candidate.report import build_release_candidate_report
+        from ..release_candidate.status import get_release_candidate_status
+
+        report = build_release_candidate_report()
+        status = get_release_candidate_status()
+        return {
+            "rc_status": status.readiness,
+            "dirty_tree_summary": report.dirty_tree_summary,
+            "commit_plan_summary": f"{len(report.commit_grouping_plan)} logical review groups; text only",
+            "hardening_report": report.docs_consistency_status,
+            "checklist_status": f"{len(report.release_candidate_checklist)} checks prepared",
+            "verification_status": report.verification_status,
+            "safety_boundary_status": report.safety_boundary_status,
+            "known_warnings": f"{len(report.known_warnings)} non-blocking warnings",
+            "blocking_issues": "none" if not report.blocking_issues else "; ".join(report.blocking_issues),
+            "no_commit_no_publish_boundary": "no add, commit, tag, push, publish, or upload through Eva",
+            "recommended_next_action": report.recommended_next_action,
+        }
+    except Exception:
+        warnings.append("Release Candidate Hardening status unavailable.")
+        return unavailable_summary(
+            "Release Candidate Hardening",
+            "Release-candidate summary unavailable.",
         )
 
 

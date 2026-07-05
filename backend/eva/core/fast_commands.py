@@ -1321,6 +1321,35 @@ def _handle_eva_ask_command(
         }
         return "Eva ask\n\n" + body_map[route.intent](), "fast-command"
     if route.intent in {
+        "rc_status",
+        "rc_manifest",
+        "rc_commit_plan",
+        "rc_hardening_report",
+        "rc_checklist",
+        "rc_readiness",
+        "rc_verification",
+    }:
+        from ..release_candidate.formatter import (
+            format_rc_checklist,
+            format_rc_commit_plan,
+            format_rc_hardening_report,
+            format_rc_manifest,
+            format_rc_readiness,
+            format_rc_status,
+            format_rc_verification,
+        )
+
+        body_map = {
+            "rc_status": format_rc_status,
+            "rc_manifest": format_rc_manifest,
+            "rc_commit_plan": format_rc_commit_plan,
+            "rc_hardening_report": format_rc_hardening_report,
+            "rc_checklist": format_rc_checklist,
+            "rc_readiness": format_rc_readiness,
+            "rc_verification": format_rc_verification,
+        }
+        return "Eva ask\n\n" + body_map[route.intent](), "fast-command"
+    if route.intent in {
         "release_status",
         "release_demo",
         "release_commands",
@@ -1844,6 +1873,13 @@ def _capability_for_natural_intent(intent: str) -> str | None:
         "coding_risk_review": "coding.risk_review",
         "coding_handoff": "coding.handoff",
         "coding_readiness": "coding.readiness",
+        "rc_status": "rc.status",
+        "rc_manifest": "rc.manifest",
+        "rc_commit_plan": "rc.commit_plan",
+        "rc_hardening_report": "rc.hardening_report",
+        "rc_checklist": "rc.checklist",
+        "rc_readiness": "rc.readiness",
+        "rc_verification": "rc.verification",
         "release_status": "release.status",
         "release_demo": "release.demo",
         "release_commands": "release.commands",
@@ -2286,6 +2322,39 @@ def maybe_handle_fast_command(
 
         target = original[len("eva browser read observe") :].strip()
         return format_browser_read_observe(target or None), "fast-command"
+
+    if normalized in {
+        "eva rc status",
+        "eva rc manifest",
+        "eva rc commit plan",
+        "eva rc hardening report",
+        "eva rc checklist",
+        "eva rc readiness",
+        "eva rc safety proof",
+        "eva rc verification",
+    }:
+        from ..release_candidate.formatter import (
+            format_rc_checklist,
+            format_rc_commit_plan,
+            format_rc_hardening_report,
+            format_rc_manifest,
+            format_rc_readiness,
+            format_rc_safety_proof,
+            format_rc_status,
+            format_rc_verification,
+        )
+
+        rc_commands = {
+            "eva rc status": format_rc_status,
+            "eva rc manifest": format_rc_manifest,
+            "eva rc commit plan": format_rc_commit_plan,
+            "eva rc hardening report": format_rc_hardening_report,
+            "eva rc checklist": format_rc_checklist,
+            "eva rc readiness": format_rc_readiness,
+            "eva rc safety proof": format_rc_safety_proof,
+            "eva rc verification": format_rc_verification,
+        }
+        return rc_commands[normalized](), "fast-command"
 
     if normalized in {
         "eva release status",

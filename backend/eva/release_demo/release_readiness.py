@@ -19,6 +19,6 @@ def release_readiness_text() -> str:
             "- Verification state: refresh with the documented terminal commands before any readiness claim.",
             "- Documentation state: public overview, demo guide, capability map, safety proof, and limitations are included.",
             "- Safety state: execution and privacy boundaries remain unchanged.",
-            "- Next safe step: Release Candidate Hardening / optional user-approved commit planning.",
+            "- Next safe step: user-approved commit execution outside Eva or a separate explicit commit-approval phase.",
         )
     )

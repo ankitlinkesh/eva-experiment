@@ -122,6 +122,28 @@ def decompose_goal(goal_text: str) -> list[EvaTaskStep]:
                 )
             )
     for intent, title, capability in (
+        ("rc_status", "Read release-candidate status", "rc.status"),
+        ("rc_manifest", "Read dirty tree manifest snapshot", "rc.manifest"),
+        ("rc_commit_plan", "Read text-only commit plan", "rc.commit_plan"),
+        ("rc_hardening_report", "Read release-candidate hardening report", "rc.hardening_report"),
+        ("rc_checklist", "Read release-candidate checklist", "rc.checklist"),
+        ("rc_readiness", "Read release-candidate readiness", "rc.readiness"),
+        ("rc_safety_proof", "Read release-candidate safety proof", "rc.safety_proof"),
+        ("rc_verification", "Read release-candidate verification plan", "rc.verification"),
+    ):
+        if intent in intents:
+            steps.append(
+                _preview_step(
+                    intent,
+                    title,
+                    "Local deterministic RC report/status/planning only; commit planning is text only and no Git, publish, mutation, filesystem, provider, control, or tool action is available.",
+                    capability,
+                    normalized,
+                    "SafetyAgent",
+                    depends_on=steps[-1].step_id,
+                )
+            )
+    for intent, title, capability in (
         ("release_status", "Read public release status", "release.status"),
         ("release_demo", "Read public demo profile", "release.demo"),
         ("release_commands", "Read public demo command guide", "release.commands"),

@@ -75,3 +75,16 @@ Phase 29 regression boundary:
 - actual: Improved through capability routing, browser live-state handling, Safe Code Index v2 read-only delegation, and diagnostics/status commands; keep testing for new fallthroughs.
 - expected: Capability questions should route to deterministic diagnostics, capability routes, agentic skills, or safe tools as appropriate, with file/tool/source grounding where relevant.
 - likely area: `backend/eva/core/capabilities.py`, `backend/eva/core/intent_router.py`, `backend/eva/api/routes.py`, `backend/eva/core/fast_commands.py`, `backend/eva/agent/policies.py`, `backend/eva/tools/registry.py`, `scripts/verify_capability_routing.py`.
+
+## Phase 30 release-candidate audit
+
+Phase 30 Release Candidate Hardening / Commit Planning is complete after this pass. Phase 30 is report/status/planning only. The commit plan is text only.
+
+- Blocking release-candidate issues: none after the focused and master verification sweep passes.
+- Non-blocking warning: ignored `.env` and `.env.local` filenames exist; contents were not read.
+- Non-blocking warning: the Phase 30 tree remains intentionally uncommitted for user review.
+- Next safe action: user-approved commit execution outside Eva or a separate explicit commit-approval phase.
+
+For Phase 30, no git add/commit/tag/push was performed and no publishing/uploading was performed. No provider SDKs or package installs were added. No real LLM/API/provider calls happen. Arbitrary file reads/writes remain blocked; browser/desktop/shell/cloud/MCP and tool execution remain locked.
+
+No secrets, tokens, cookies, passwords, browser sessions, or config contents are read. CodingAgent remains preview/report/status only. News remains local/mock or safe-read-only. Voice remains a locked/mock foundation. Phase 12L narrow approved new `.md`/`.txt` creation remains the only real write path.

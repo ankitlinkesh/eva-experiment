@@ -279,4 +279,4 @@ Phase 29 Public Demo / Release is complete after this pass. It adds eight read/s
 
 No publishing, uploading, package release, installer creation, commit, tag, push, source edit, shell/test/package/git execution, arbitrary filesystem access, live provider call, or tool execution is enabled. Secret/config/session and raw private dumps remain blocked. Browser/desktop/shell/cloud/MCP execution remains locked. CodingAgent, News Dashboard, and Voice retain their Phase 28/27/22 boundaries. Phase 12L narrow approved new `.md`/`.txt` creation remains the only real file write path.
 
-Next safe step: Release Candidate Hardening / optional user-approved commit planning.
+Phase 29 handed off to Phase 30 Release Candidate Hardening. The current next safe step is user-approved commit execution outside Eva or a separate explicit commit-approval phase.

@@ -498,6 +498,31 @@ def _release_demo_schema(name: str, description: str) -> dict[str, Any]:
     }
 
 
+def _release_candidate_schema(name: str, description: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "description": description,
+        "parameters": [],
+        "outputs": ["RC report/status/commit-plan text only"],
+        "safety_notes": [
+            "Report/status/planning only.",
+            "No git commit/tag/push.",
+            "No staging.",
+            "No publish/upload.",
+            "No shell/package/cloud/MCP execution.",
+            "No browser/desktop control.",
+            "No source-code edits.",
+            "No arbitrary filesystem reads/writes.",
+            "No secret/config/session reads.",
+            "No live LLM/API/provider calls.",
+            "No tool execution.",
+            "Output is RC report/status/commit-plan text only.",
+            "Phase 12L is the only existing real write boundary.",
+        ],
+        "execution_status": "report_only",
+    }
+
+
 _SCHEMAS: dict[str, dict[str, Any]] = {
     "llm.fallback_chain": {"name":"LLM Fallback Chain","description":"Show mock-only fallback chain; live calls locked.","parameters":[],"execution_status":"read_only_metadata"},
     "llm.fallback_simulate": {"name":"LLM Fallback Simulation","description":"Simulate named failure without provider call.","parameters":[{"name":"scenario","type":"string","required":True}],"execution_status":"read_only_metadata"},
@@ -649,6 +674,14 @@ _SCHEMAS: dict[str, dict[str, Any]] = {
     "release.readiness": _release_demo_schema("Release Readiness", "Show local demo readiness without publishing."),
     "release.limitations": _release_demo_schema("Release Known Limitations", "Show honest public limitations."),
     "release.verification": _release_demo_schema("Release Verification Bundle", "Show manual verifier commands."),
+    "rc.status": _release_candidate_schema("Release Candidate Status", "Show Phase 30 locked readiness."),
+    "rc.manifest": _release_candidate_schema("RC Dirty Tree Manifest", "Show the audited change grouping."),
+    "rc.commit_plan": _release_candidate_schema("RC Commit Plan", "Show commit candidates as text only."),
+    "rc.hardening_report": _release_candidate_schema("RC Hardening Report", "Show bounded-claim findings."),
+    "rc.checklist": _release_candidate_schema("RC Checklist", "Show release-candidate review checks."),
+    "rc.readiness": _release_candidate_schema("RC Readiness", "Show safe-to-commit guidance without Git."),
+    "rc.safety_proof": _release_candidate_schema("RC Safety Proof", "Show deterministic Phase 30 safety evidence."),
+    "rc.verification": _release_candidate_schema("RC Verification", "Show manual checks without execution."),
     "research_memory.status": {
         "name": "Research Memory Status",
         "description": "Show local Research Memory status without paths.",

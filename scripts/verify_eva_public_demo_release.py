@@ -147,7 +147,10 @@ def main() -> int:
     for field in REQUIRED_MODEL_FIELDS:
         check(field in fields, f"release demo model field missing: {field}")
     check(profile.demo_command_list and profile.known_limitations, "release demo profile is incomplete")
-    check(profile.next_safe_step.startswith("Release Candidate Hardening"), "next safe step is incorrect")
+    check(
+        profile.next_safe_step.startswith("user-approved commit execution outside Eva"),
+        "next safe step is incorrect",
+    )
     check(get_release_demo_status().publishing_enabled is False, "publishing must remain disabled")
 
     outputs = (
@@ -232,7 +235,7 @@ def main() -> int:
         "no arbitrary file reads/writes happen",
         "no secret/config/session reads happen",
         "Phase 12L narrow real-create remains the only real file write path",
-        "Release Candidate Hardening / optional user-approved commit planning",
+        "user-approved commit execution outside Eva",
     ):
         check(phrase.lower() in review.lower(), f"team review release boundary missing: {phrase}")
 

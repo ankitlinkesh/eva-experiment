@@ -8,6 +8,14 @@ def _text(goal_text: str) -> str:
 def infer_goal_intents(goal_text: str) -> list[str]:
     text = _text(goal_text)
     intents: list[str] = []
+    if "release candidate status" in text or "rc status" in text: intents.append("rc_status")
+    if "dirty tree manifest" in text: intents.append("rc_manifest")
+    if "commit plan" in text or "what should i commit" in text: intents.append("rc_commit_plan")
+    if "hardening report" in text: intents.append("rc_hardening_report")
+    if "rc checklist" in text: intents.append("rc_checklist")
+    if "safe to commit" in text or "ready for release candidate" in text: intents.append("rc_readiness")
+    if "rc safety proof" in text: intents.append("rc_safety_proof")
+    if "rc verification" in text: intents.append("rc_verification")
     if "release status" in text: intents.append("release_status")
     if "public demo" in text: intents.append("release_demo")
     if "demo commands" in text: intents.append("release_commands")
@@ -727,6 +735,18 @@ def select_capabilities_for_goal(goal_text: str) -> list[str]:
         ("coding_handoff", "coding.handoff"),
         ("coding_blocked_actions", "coding.blocked_actions"),
         ("coding_readiness", "coding.readiness"),
+    ):
+        if intent in intents:
+            selected.append(capability)
+    for intent, capability in (
+        ("rc_status", "rc.status"),
+        ("rc_manifest", "rc.manifest"),
+        ("rc_commit_plan", "rc.commit_plan"),
+        ("rc_hardening_report", "rc.hardening_report"),
+        ("rc_checklist", "rc.checklist"),
+        ("rc_readiness", "rc.readiness"),
+        ("rc_safety_proof", "rc.safety_proof"),
+        ("rc_verification", "rc.verification"),
     ):
         if intent in intents:
             selected.append(capability)

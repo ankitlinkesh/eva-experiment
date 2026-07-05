@@ -26,6 +26,7 @@ class ControlCenterStatus:
     news_dashboard_summary: dict[str, object]
     coding_agent_summary: dict[str, object]
     release_demo_summary: dict[str, object]
+    release_candidate_summary: dict[str, object]
     file_agent_summary: dict[str, object]
     approval_summary: dict[str, object]
     sandbox_apply_summary: dict[str, object]

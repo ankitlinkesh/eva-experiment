@@ -570,4 +570,4 @@ Phase 29 Public Demo / Release is complete after this pass. Planner and team-rev
 
 No provider SDKs or package installs were added; no real LLM/API/provider calls happen; no secret/config/session data or raw private dumps are read. CodingAgent remains preview/report/status only, News Dashboard remains local/mock or safe-read-only only, Voice remains locked/mock, and browser/desktop/shell/cloud/MCP execution remains locked. Phase 12L narrow approved new `.md`/`.txt` creation remains the only real file write path.
 
-Next safe step: Release Candidate Hardening / optional user-approved commit planning.
+Phase 29 handed off to Phase 30 Release Candidate Hardening. The current next safe step is user-approved commit execution outside Eva or a separate explicit commit-approval phase.

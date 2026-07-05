@@ -332,4 +332,16 @@ Run `scripts/verify_eva_public_demo_release.py` directly and through both master
 
 The verifier performs no publishing, uploading, packaging, installer creation, commit, tag, push, provider SDK import, package install, shell/test/package/git execution, arbitrary filesystem access through the release-demo layer, live LLM/API/provider/network call, browser/desktop control, source edit, unrestricted crawl, secret/config/session/private-dump read, or tool execution. Phase 12L narrow approved new `.md`/`.txt` creation remains the only real file write path.
 
-Next safe step: Release Candidate Hardening / optional user-approved commit planning.
+Phase 29 handed off to the Phase 30 release-candidate verifier documented below.
+
+# Phase 30 Release Candidate Hardening / Commit Planning
+
+Phase 30 Release Candidate Hardening / Commit Planning is complete after this pass when the focused verifier, master quick/full profiles, compileall, `git diff --check`, and final status review pass. Run `scripts/verify_eva_release_candidate_hardening.py` directly. Phase 30 is report/status/planning only. The commit plan is text only.
+
+The verifier covers RC models, status, manifest, commit plan, hardening report, checklist, readiness, safety proof, verification guidance, all eight commands, `eva ask`, Control Center, AI OS, capabilities, mappings, schemas, planner, team review, docs, master-profile inclusion, human-readable output, and forbidden runtime surfaces.
+
+For Phase 30, no git add/commit/tag/push was performed and no publishing/uploading was performed. No provider SDKs or package installs were added. No real LLM/API/provider calls happen. No `.env`, `.env.local`, secrets, tokens, cookies, passwords, browser sessions, or config contents are read. Arbitrary file reads/writes remain blocked. Browser/desktop/shell/cloud/MCP execution and tool execution remain locked.
+
+CodingAgent remains preview/report/status only, News remains local/mock or safe-read-only, and Voice remains a locked/mock foundation. Phase 12L narrow approved new `.md`/`.txt` creation remains the only real write path.
+
+Next safe step: user-approved commit execution outside Eva or a separate explicit commit-approval phase.

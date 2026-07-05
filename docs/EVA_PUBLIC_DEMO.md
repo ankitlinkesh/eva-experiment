@@ -14,4 +14,4 @@ News remains local/mock or safe-read-only. CodingAgent remains preview/report/st
 
 Phase 12L narrow approved new `.md`/`.txt` creation remains the only real file write path.
 
-The next safe step is Release Candidate Hardening / optional user-approved commit planning.
+The current next safe step is user-approved commit execution outside Eva or a separate explicit commit-approval phase.

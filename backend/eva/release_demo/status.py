@@ -11,5 +11,5 @@ def get_release_demo_status() -> ReleaseDemoStatus:
         external_upload_enabled=False,
         git_release_enabled=False,
         readiness="ready for local public-demo review with fresh verifier evidence",
-        next_safe_step="Release Candidate Hardening / optional user-approved commit planning",
+        next_safe_step="user-approved commit execution outside Eva or a separate explicit commit-approval phase",
     )

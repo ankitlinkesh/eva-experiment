@@ -39,10 +39,13 @@ def feature_states_text() -> str:
             "- Coding Specialist / CodingAgent Foundation: Phase 28 preview/report/status only.",
             "- CodingAgent source editing and patch application: locked.",
             "- CodingAgent shell, test, package, git, arbitrary file, and tool execution: locked.",
-            "- CodingAgent next phase: Phase 29 Public Demo / Release.",
+            "- CodingAgent Phase 28 handoff: Phase 29 Public Demo / Release is complete.",
             "- Public Demo / Release: Phase 29 report/status/profile only.",
             "- Public Demo / Release publishing, upload, package, commit, tag, push, and external actions: locked.",
-            "- Public Demo / Release next safe step: Release Candidate Hardening / optional user-approved commit planning.",
+            "- Release Candidate Hardening: Phase 30 report/status/planning only.",
+            "- Release Candidate Hardening commit planning is text-only.",
+            "- Release Candidate Hardening allows no Git operations and no publishing.",
+            "- Release Candidate Hardening next safe step: user-approved commit execution outside Eva or a separate explicit commit-approval phase.",
         ]
         + [f"- {name}: {description}." for name, description in descriptions]
     )

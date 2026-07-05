@@ -32,7 +32,7 @@ def build_demo_profile() -> ReleaseDemoProfile:
             "Eva is a source-available local-first agent foundation. The public demo shows "
             "deterministic reports and bounded previews, not unrestricted autonomous execution."
         ),
-        next_safe_step="Release Candidate Hardening / optional user-approved commit planning",
+        next_safe_step="user-approved commit execution outside Eva or a separate explicit commit-approval phase",
         final_readiness_status="ready_for_local_demo_review_not_published",
         no_secret_exposure_statement="No secrets were read or exposed.",
         no_real_provider_call_statement="No live LLM/API/provider call was made.",

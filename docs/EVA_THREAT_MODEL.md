@@ -213,4 +213,4 @@ Phase 29 Public Demo / Release is complete after this pass. The release-demo lay
 
 No publishing/uploading/commit/tag/push happened. No provider SDKs or package installs were added. No real LLM/API/provider calls happen. No `.env`, `.env.local`, secrets, tokens, cookies, passwords, browser sessions, config secrets, raw source dumps, raw WorkSession dumps, or raw memory database dumps are read. Arbitrary filesystem reads/writes remain blocked. CodingAgent remains preview/report/status only; News remains local/mock or safe-read-only; Voice remains locked/mock; browser/desktop/shell/cloud/MCP execution remains locked.
 
-Phase 12L narrow approved new `.md`/`.txt` creation remains the only real file write path. Next safe step: Release Candidate Hardening / optional user-approved commit planning.
+Phase 12L narrow approved new `.md`/`.txt` creation remains the only real file write path. Phase 29 handed off to Phase 30 Release Candidate Hardening; the current next safe step is user-approved commit execution outside Eva or a separate explicit commit-approval phase.

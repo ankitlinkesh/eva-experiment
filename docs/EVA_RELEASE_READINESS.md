@@ -16,4 +16,18 @@ News remains local/mock or safe-read-only, and voice remains a locked/mock found
 
 Phase 12L narrow approved text-file creation remains the only real file write path.
 
-Next safe step: Release Candidate Hardening / optional user-approved commit planning.
+Phase 29 handed off to the Phase 30 release-candidate readiness review below.
+
+## Phase 30 release-candidate readiness
+
+Phase 30 Release Candidate Hardening / Commit Planning is complete after this pass. Phase 30 is report/status/planning only. The commit plan is text only.
+
+The candidate is ready for user review after fresh focused, quick, full, compile, diff, and status evidence. It is not committed, tagged, pushed, published, or uploaded by Phase 30.
+
+For Phase 30, no git add/commit/tag/push was performed and no publishing/uploading was performed. No provider SDKs or package installs were added. No real LLM/API/provider calls happen. No `.env`, `.env.local`, secrets, tokens, cookies, passwords, browser sessions, or config contents are read.
+
+Arbitrary file reads/writes remain blocked. Browser/desktop/shell/cloud/MCP and tool execution remain locked. CodingAgent remains preview/report/status only. News remains local/mock or safe-read-only. Voice remains a locked/mock foundation.
+
+Phase 12L narrow approved new `.md`/`.txt` creation remains the only real write path.
+
+Next safe step: user-approved commit execution outside Eva or a separate explicit commit-approval phase.

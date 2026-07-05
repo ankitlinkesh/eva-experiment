@@ -599,4 +599,14 @@ Phase 29 Public Demo / Release is complete after this pass. It adds a determinis
 
 No provider SDKs or package installs were added. No real LLM/API/provider calls happen. No `.env`, `.env.local`, secrets, tokens, cookies, passwords, browser sessions, config secrets, raw source dumps, raw WorkSession dumps, or raw memory database dumps are read. Arbitrary file reads/writes remain blocked. Browser/desktop/shell/cloud/MCP execution remains locked. CodingAgent remains preview/report/status only, News Dashboard remains local/mock or safe-read-only only, and Voice remains a locked/mock foundation. Phase 12L narrow approved new `.md`/`.txt` creation remains the only real file write path.
 
-Next safe step: Release Candidate Hardening / optional user-approved commit planning. No automatic commit or publication is authorized.
+Phase 29 handed off to Phase 30 Release Candidate Hardening; that hardening pass is recorded below. No automatic commit or publication is authorized.
+
+## Phase 30 Release Candidate Hardening / Commit Planning
+
+Phase 30 Release Candidate Hardening / Commit Planning is complete after this pass. Phase 30 is report/status/planning only. The commit plan is text only. It adds deterministic RC status, manifest, commit-plan, hardening, checklist, readiness, safety-proof, and verification reports without enabling Git or release execution.
+
+For Phase 30, no git add/commit/tag/push was performed and no publishing/uploading was performed. No provider SDKs or package installs were added. No real LLM/API/provider calls happen. No `.env`, `.env.local`, secrets, tokens, cookies, passwords, browser sessions, or config contents are read. Arbitrary file reads/writes remain blocked. Browser/desktop/shell/cloud/MCP execution and tool execution remain locked.
+
+CodingAgent remains preview/report/status only, News Dashboard remains local/mock or safe-read-only only, and Voice remains a locked/mock foundation. Phase 12L narrow approved new `.md`/`.txt` creation remains the only real write path.
+
+Next safe step: user-approved commit execution outside Eva or a separate explicit commit-approval phase.

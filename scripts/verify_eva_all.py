@@ -58,6 +58,7 @@ FULL_VERIFIERS = [
     "verify_eva_news_web_intelligence_dashboard.py",
     "verify_eva_coding_agent_foundation.py",
     "verify_eva_public_demo_release.py",
+    "verify_eva_release_candidate_hardening.py",
     "verify_eva_file_agent_real_apply_gate.py",
     "verify_eva_file_agent_real_create_gate.py",
     "verify_eva_file_agent_sandbox_apply.py",
@@ -114,6 +115,7 @@ QUICK_VERIFIERS = [
     "verify_eva_news_web_intelligence_dashboard.py",
     "verify_eva_coding_agent_foundation.py",
     "verify_eva_public_demo_release.py",
+    "verify_eva_release_candidate_hardening.py",
     "verify_eva_file_agent_real_apply_gate.py",
 ]
 

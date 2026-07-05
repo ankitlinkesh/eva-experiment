@@ -432,6 +432,27 @@ _LINKS: tuple[CapabilityResourceLink, ...] = (
             "verification",
         )
     ],
+    *[
+        _link(
+            f"rc.{name}",
+            "eva-release-candidate",
+            "Release Candidate Hardening",
+            agent="SafetyAgent",
+            execution_path="fast_command",
+            preview_only=True,
+            notes="Phase 30 report/status/planning only; commit plan is text only and no Git, publish, execution, file-access, or new-write action is available.",
+        )
+        for name in (
+            "status",
+            "manifest",
+            "commit_plan",
+            "hardening_report",
+            "checklist",
+            "readiness",
+            "safety_proof",
+            "verification",
+        )
+    ],
     _link("desktop.status", "eva-desktop-agent-safety", "DesktopAgent", agent="DesktopAgent", execution_path="fast_command", notes="Read-only DesktopAgent safety status; no screen observation or desktop control."),
     _link("desktop.policy", "eva-desktop-agent-safety", "DesktopAgent", agent="DesktopAgent", execution_path="fast_command", notes="Read-only desktop policy summary; real screen observation and desktop control remain locked."),
     _link("desktop.blocked_actions", "eva-desktop-agent-safety", "DesktopAgent", agent="DesktopAgent", execution_path="fast_command", notes="Read-only blocked desktop action list."),

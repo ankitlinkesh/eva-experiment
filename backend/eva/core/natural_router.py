@@ -29,6 +29,20 @@ def route_natural_request(text: str) -> NaturalRouteResult:
     normalized = _normalize(original)
     if not normalized:
         return _route(original, "unknown", 0.0, None, "unknown", refusal="Give me a request after `eva ask`.")
+    if _has_any(normalized, ("show release candidate status", "show rc status")):
+        return _route(original, "rc_status", 0.997, "eva rc status", "read", planner=True)
+    if _has_any(normalized, ("show dirty tree manifest",)):
+        return _route(original, "rc_manifest", 0.997, "eva rc manifest", "read", planner=True)
+    if _has_any(normalized, ("show commit plan", "what should i commit")):
+        return _route(original, "rc_commit_plan", 0.997, "eva rc commit plan", "read", planner=True)
+    if _has_any(normalized, ("show hardening report",)):
+        return _route(original, "rc_hardening_report", 0.997, "eva rc hardening report", "read", planner=True)
+    if _has_any(normalized, ("show rc checklist",)):
+        return _route(original, "rc_checklist", 0.997, "eva rc checklist", "read", planner=True)
+    if _has_any(normalized, ("is eva safe to commit", "is eva ready for release candidate")):
+        return _route(original, "rc_readiness", 0.997, "eva rc readiness", "read", planner=True)
+    if _has_any(normalized, ("show rc verification",)):
+        return _route(original, "rc_verification", 0.997, "eva rc verification", "read", planner=True)
     if _has_any(normalized, ("show release status",)):
         return _route(original, "release_status", 0.995, "eva release status", "read", planner=True)
     if _has_any(normalized, ("show public demo",)):

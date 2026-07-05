@@ -17,3 +17,17 @@ All user-facing reports include explicit no-action and no-secret boundaries.
 Verification is performed by the focused Phase 29 verifier and both master profiles.
 
 Phase 12L narrow approved text-file creation remains Eva's only real file write path.
+
+## Phase 30 safety proof
+
+Phase 30 Release Candidate Hardening / Commit Planning is complete after this pass. Phase 30 is report/status/planning only. The commit plan is text only.
+
+Every RC command returns deterministic local text. No RC module imports or calls Git, shell, package, cloud, MCP, browser-control, desktop-control, provider, filesystem-mutation, or tool executors.
+
+For Phase 30, no git add/commit/tag/push was performed and no publishing/uploading was performed. No provider SDKs or package installs were added. No real LLM/API/provider calls happen.
+
+No `.env`, `.env.local`, secrets, tokens, cookies, passwords, browser sessions, or config contents are read. Arbitrary file reads/writes, raw memory dumps, and raw WorkSession dumps remain blocked.
+
+CodingAgent remains preview/report/status only. News remains local/mock or safe-read-only. Voice remains a locked/mock foundation. Browser/desktop/shell/cloud/MCP execution and tool execution remain locked.
+
+Phase 12L narrow approved new `.md`/`.txt` creation remains the only real write path. The next safe step is user-approved commit execution outside Eva or a separate explicit commit-approval phase.

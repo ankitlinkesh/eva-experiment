@@ -71,6 +71,7 @@ def build_default_registry() -> CapabilityRegistry:
             StaticCapabilityProvider("desktop_agent", "DesktopAgent", tuple(_desktop_agent_capabilities())),
             StaticCapabilityProvider("coding_agent", "CodingAgent", tuple(_coding_agent_capabilities())),
             StaticCapabilityProvider("release_demo", "Public Demo / Release", tuple(_release_demo_capabilities())),
+            StaticCapabilityProvider("release_candidate", "Release Candidate Hardening", tuple(_release_candidate_capabilities())),
             StaticCapabilityProvider("eva_core", "Eva Core", tuple(_eva_core_capabilities())),
         ]
     )
@@ -543,6 +544,39 @@ def _release_demo_capabilities() -> list[Capability]:
             name,
             description,
             "release_demo",
+            "public_release",
+            verifier_name=verifier,
+            safety_notes=notes,
+        )
+        for capability_id, name, description in definitions
+    ]
+
+
+def _release_candidate_capabilities() -> list[Capability]:
+    verifier = "verify_eva_release_candidate_hardening.py"
+    notes = (
+        "Phase 30 deterministic report/status/planning only. Commit planning is text only. "
+        "No staging, commit, tag, push, publish, upload, shell/package/cloud/MCP execution, "
+        "browser/desktop control, source edits, arbitrary filesystem access, secret/config/session "
+        "reads, live LLM/API/provider calls, tool execution, or new write path. Phase 12L remains "
+        "the only real file-write boundary."
+    )
+    definitions = (
+        ("rc.status", "Release Candidate Status", "Show Phase 30 readiness and locked state."),
+        ("rc.manifest", "RC Dirty Tree Manifest", "Show the deterministic audited change grouping."),
+        ("rc.commit_plan", "RC Commit Plan", "Show human-reviewable commit candidates as text only."),
+        ("rc.hardening_report", "RC Hardening Report", "Show bounded claim and safety findings."),
+        ("rc.checklist", "RC Checklist", "Show the release-candidate review checklist."),
+        ("rc.readiness", "RC Readiness", "Show safe-to-commit guidance without Git execution."),
+        ("rc.safety_proof", "RC Safety Proof", "Show deterministic Phase 30 safety evidence."),
+        ("rc.verification", "RC Verification", "Show manual verifier commands without running them."),
+    )
+    return [
+        _cap(
+            capability_id,
+            name,
+            description,
+            "release_candidate",
             "public_release",
             verifier_name=verifier,
             safety_notes=notes,
