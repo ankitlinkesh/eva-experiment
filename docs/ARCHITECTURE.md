@@ -15,8 +15,8 @@ Eva is a fresh, modular desktop agent inspired by OpenHuman's product shape: a l
 
 ```mermaid
 flowchart LR
-    Phone["Phone Browser"] -->|LAN HTTP/WebSocket| API["FastAPI Gateway"]
-    Desktop["Laptop Browser/Desktop UI"] -->|HTTP/WebSocket| API
+    Phone["Phone Browser"] -->|LAN HTTP| API["FastAPI Gateway"]
+    Desktop["Laptop Browser/Desktop UI"] -->|HTTP| API
     API --> Agent["Eva Agent Core"]
     Agent --> Models["Model Router / Ollama"]
     Agent --> Tools["Tool Registry"]
@@ -34,7 +34,7 @@ flowchart LR
 - `backend/eva/memory`: local SQLite conversations and event history.
 - `backend/eva/screen`: on-demand laptop screen snapshots for phone viewing and future vision prompts.
 - `backend/eva/voice`: interfaces for STT, TTS, wake-word, and barge-in. The MVP keeps these as clean seams.
-- `backend/eva/api`: HTTP routes and WebSocket gateway.
+- `backend/eva/api`: HTTP routes (chat, streaming chat, tools, TTS, screen snapshot).
 - `frontend`: responsive command-center UI served by the backend.
 
 ## Phone Control Flow
@@ -44,7 +44,7 @@ setting `[server] host = "0.0.0.0"` in `config/eva.toml` on a trusted network.
 
 1. Eva starts on the laptop at `<configured-host>:8765`.
 2. The phone opens `http://<laptop-ip>:8765`.
-3. The UI connects to `/ws` and calls `/api/chat` for commands.
+3. The UI calls `/api/chat` (and `/api/chat/stream`) for commands over HTTP.
 4. Screen viewing uses `/api/screen/snapshot`, which captures the laptop screen only when the user presses the screen button.
 5. Future secure pairing can promote this MVP token into QR pairing plus per-device sessions.
 

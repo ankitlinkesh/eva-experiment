@@ -867,7 +867,7 @@ async def health(request: Request) -> dict:
         "user_name": os.environ.get("EVA_USER_NAME", USER_NAME),
         "startup_greeting": os.environ.get("EVA_STARTUP_GREETING", STARTUP_GREETING),
         "persona_style": os.environ.get("EVA_PERSONA_STYLE", PERSONA_STYLE),
-        "offline_message": "Yo Ankit, backend looks offline right now. Some controls won't work till it's back.",
+        "offline_message": f"Yo {os.environ.get('EVA_USER_NAME', USER_NAME)}, backend looks offline right now. Some controls won't work till it's back.",
         "voice": {
             "enabled": os.environ.get("EVA_VOICE_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"},
             "provider": os.environ.get("EVA_TTS_PROVIDER", "browser"),
