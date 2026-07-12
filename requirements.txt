@@ -1,7 +1,15 @@
-fastapi
-uvicorn[standard]
-pydantic
-httpx
-mss
-pillow
-python-multipart
+# Core runtime dependencies, pinned to known-good versions for reproducibility.
+fastapi==0.136.1
+uvicorn[standard]==0.47.0
+pydantic==2.13.4
+httpx==0.28.1
+mss==10.2.0
+pillow==12.2.0
+python-multipart==0.0.29
+
+# Optional: real screen/desktop control (the screen.* tools). The app runs
+# without it — those tools degrade to a clear "not installed" message.
+# pyautogui==0.9.54
+
+# Not pip packages: Tavily search is an HTTP API used via httpx (needs an API
+# key in .env), and Piper TTS is a bundled binary under bin/piper.exe.

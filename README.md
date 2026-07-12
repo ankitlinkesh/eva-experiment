@@ -146,6 +146,13 @@ Run both master profiles:
 .\.venv\Scripts\python.exe scripts\verify_eva_all.py --full --timeout 90
 ```
 
+Run the pytest safety suite (permission gate, ledger, path allowlist, chat pipeline):
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
 Finish with:
 
 ```powershell
