@@ -1398,7 +1398,19 @@ class ToolRegistry:
             "research_status",
             "guarded_power_action",
         ]
-        return [self._public_spec(self._tools[name]) for name in visible]
+        specs = [self._public_spec(self._tools[name]) for name in visible if name in self._tools]
+
+        # Browser DOM tools are planner-reachable only when Playwright is enabled
+        # (they exist in the registry always, but are inert unless the flag is on).
+        from ..runtime.feature_flags import get_v2_feature_flags
+        if get_v2_feature_flags().playwright_enabled:
+            specs.extend(self._public_spec(self._tools[name]) for name in sorted(self._tools) if name.startswith("web."))
+
+        # MCP tools are planner-reachable whenever the MCP subsystem has loaded
+        # them (their specs are only present in self._tools when enabled+configured).
+        specs.extend(self._public_spec(self._tools[name]) for name in sorted(self._tools) if name.startswith("mcp."))
+
+        return specs
 
     def get(self, name: str) -> ToolSpec | None:
         return self._tools.get(name)
