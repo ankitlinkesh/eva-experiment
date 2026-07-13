@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from typing import Any
 
 import httpx
 
@@ -22,7 +23,14 @@ class GeminiProvider:
     def available(self) -> bool:
         return bool(self.api_keys)
 
-    async def complete(self, messages: list[Message], temperature: float = 0.2, max_tokens: int = 800) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[Message],
+        temperature: float = 0.2,
+        max_tokens: int = 800,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> LLMResponse:
+        # tools: native function-calling not yet wired for this provider
         if not self.available():
             return LLMResponse(provider=self.name, model=self.model, ok=False, error="missing_api_key")
 

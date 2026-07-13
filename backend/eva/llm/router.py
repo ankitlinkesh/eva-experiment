@@ -4,7 +4,7 @@ import json
 import os
 import re
 import time
-from typing import Iterable
+from typing import Any, Iterable
 
 from ..core.config import ModelSettings
 from .providers.clod import ClodProvider
@@ -240,9 +240,10 @@ async def _call_provider(
     purpose: str,
     temperature: float,
     max_tokens: int,
+    tools: list[dict[str, Any]] | None = None,
 ) -> tuple[LLMResponse, bool]:
     estimate = _estimated_tokens(messages, max_tokens)
-    response = await provider.complete(messages, temperature=temperature, max_tokens=max_tokens)
+    response = await provider.complete(messages, temperature=temperature, max_tokens=max_tokens, tools=tools)
     if response.ok and purpose == "planner" and not _json_is_valid(response.text):
         response = LLMResponse(
             provider=response.provider,
@@ -281,6 +282,7 @@ async def _try_nvidia_nim_models(
     temperature: float,
     max_tokens: int,
     estimated_tokens: int,
+    tools: list[dict[str, Any]] | None = None,
 ) -> RoutedLLMResponse | None:
     models = nvidia_nim_models_for_purpose(purpose)
     if not models:
@@ -300,7 +302,7 @@ async def _try_nvidia_nim_models(
             attempts.append(_attempt_from_response(response, purpose, fallback_used=bool(attempts)))
             continue
 
-        response, retryable = await _call_provider(provider, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens)
+        response, retryable = await _call_provider(provider, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens, tools=tools)
         if response.ok and response.text.strip():
             attempts.append(_attempt_from_response(response, purpose, selected_provider="nvidia_nim", fallback_used=bool(attempts)))
             return RoutedLLMResponse(response=response, attempts=attempts, fallback_occurred=len(attempts) > 1)
@@ -320,6 +322,7 @@ async def complete_with_fallback(
     purpose: str = "planner",
     temperature: float = 0.2,
     max_tokens: int = 800,
+    tools: list[dict[str, Any]] | None = None,
 ) -> RoutedLLMResponse:
     limiter = LLMRateLimiter()
     attempts: list[LLMAttempt] = []
@@ -336,6 +339,7 @@ async def complete_with_fallback(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 estimated_tokens=estimate,
+                tools=tools,
             )
             if routed is not None:
                 return routed
@@ -365,7 +369,7 @@ async def complete_with_fallback(
                     if emergency.available() and emergency.model != provider.model:
                         allowed_emergency, emergency_reason = limiter.can_call("groq", emergency.model, estimated_tokens=estimate)
                         if allowed_emergency:
-                            emergency_response, _ = await _call_provider(emergency, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens)
+                            emergency_response, _ = await _call_provider(emergency, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens, tools=tools)
                             if emergency_response.ok and emergency_response.text.strip():
                                 attempts.append(_attempt_from_response(emergency_response, purpose, selected_provider="groq", fallback_used=True))
                                 return RoutedLLMResponse(response=emergency_response, attempts=attempts, fallback_occurred=True)
@@ -374,7 +378,7 @@ async def complete_with_fallback(
                             attempts.append(LLMAttempt(provider="groq", model=emergency.model, purpose=purpose, ok=False, error=emergency_reason, fallback_used=True))
                 continue
 
-        response, retryable = await _call_provider(provider, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens)
+        response, retryable = await _call_provider(provider, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens, tools=tools)
         if response.ok and response.text.strip():
             selected = response.provider
             attempts.append(_attempt_from_response(response, purpose, selected_provider=selected, fallback_used=bool(attempts)))
@@ -387,7 +391,7 @@ async def complete_with_fallback(
             if emergency.available() and emergency.model != provider.model:
                 allowed, reason = limiter.can_call("groq", emergency.model, estimated_tokens=estimate)
                 if allowed:
-                    emergency_response, _ = await _call_provider(emergency, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens)
+                    emergency_response, _ = await _call_provider(emergency, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens, tools=tools)
                     if emergency_response.ok and emergency_response.text.strip():
                         attempts.append(_attempt_from_response(emergency_response, purpose, selected_provider="groq", fallback_used=True))
                         return RoutedLLMResponse(response=emergency_response, attempts=attempts, fallback_occurred=True)

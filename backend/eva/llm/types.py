@@ -17,6 +17,7 @@ class LLMResponse:
     rate_limited: bool = False
     retry_after_seconds: int | None = None
     raw_headers: dict[str, str] | None = None
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,13 @@ class LLMProvider(Protocol):
     def available(self) -> bool:
         ...
 
-    async def complete(self, messages: list[Message], temperature: float = 0.2, max_tokens: int = 800) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[Message],
+        temperature: float = 0.2,
+        max_tokens: int = 800,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> LLMResponse:
         ...
 
 

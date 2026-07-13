@@ -2,6 +2,7 @@
 
 import json
 import os
+from typing import Any
 
 import httpx
 
@@ -28,7 +29,13 @@ class OpenAICompatibleProvider:
     def available(self) -> bool:
         return bool(self.api_key)
 
-    async def complete(self, messages: list[Message], temperature: float = 0.2, max_tokens: int = 800) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[Message],
+        temperature: float = 0.2,
+        max_tokens: int = 800,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> LLMResponse:
         if not self.available():
             return LLMResponse(provider=self.name, model=self.model, ok=False, error="missing_api_key")
         headers = {
@@ -37,6 +44,9 @@ class OpenAICompatibleProvider:
             **self.extra_headers,
         }
         payload = {"model": self.model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=4.0)) as client:
                 response = await client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
@@ -56,10 +66,23 @@ class OpenAICompatibleProvider:
             )
         try:
             data = response.json()
-            text = str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
+            message = data.get("choices", [{}])[0].get("message", {})
+            text = str(message.get("content", "")).strip()
+            raw_tool_calls = message.get("tool_calls")
         except Exception as exc:
             return LLMResponse(provider=self.name, model=self.model, ok=False, error=f"invalid_response:{exc}", status_code=response.status_code, raw_headers=self._safe_headers(raw_headers))
-        return LLMResponse(provider=self.name, model=self.model, text=text, ok=bool(text), error=None if text else "empty_response", status_code=response.status_code, raw_headers=self._safe_headers(raw_headers))
+        normalized_tool_calls = list(raw_tool_calls) if raw_tool_calls else None
+        ok = bool(text) or bool(normalized_tool_calls)
+        return LLMResponse(
+            provider=self.name,
+            model=self.model,
+            text=text,
+            ok=ok,
+            error=None if ok else "empty_response",
+            status_code=response.status_code,
+            raw_headers=self._safe_headers(raw_headers),
+            tool_calls=normalized_tool_calls,
+        )
 
 
     def _error_text(self, response: httpx.Response) -> str:
