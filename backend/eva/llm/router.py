@@ -171,7 +171,7 @@ def build_provider(name: str, settings: ModelSettings) -> LLMProvider | None:
 
 
 def _is_retryable_failure(response: LLMResponse) -> bool:
-    if response.ok and response.text.strip():
+    if response.ok and (response.text.strip() or response.tool_calls):
         return False
     if response.rate_limited:
         return True
@@ -244,7 +244,10 @@ async def _call_provider(
 ) -> tuple[LLMResponse, bool]:
     estimate = _estimated_tokens(messages, max_tokens)
     response = await provider.complete(messages, temperature=temperature, max_tokens=max_tokens, tools=tools)
-    if response.ok and purpose == "planner" and not _json_is_valid(response.text):
+    # The planner-JSON guard only applies to the JSON-prompt path. A native
+    # function-calling response carries tool_calls (and often empty text), which
+    # is valid even though the text isn't JSON -- don't reject it.
+    if response.ok and purpose == "planner" and not response.tool_calls and not _json_is_valid(response.text):
         response = LLMResponse(
             provider=response.provider,
             model=response.model,
@@ -303,7 +306,7 @@ async def _try_nvidia_nim_models(
             continue
 
         response, retryable = await _call_provider(provider, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens, tools=tools)
-        if response.ok and response.text.strip():
+        if response.ok and (response.text.strip() or response.tool_calls):
             attempts.append(_attempt_from_response(response, purpose, selected_provider="nvidia_nim", fallback_used=bool(attempts)))
             return RoutedLLMResponse(response=response, attempts=attempts, fallback_occurred=len(attempts) > 1)
 
@@ -370,7 +373,7 @@ async def complete_with_fallback(
                         allowed_emergency, emergency_reason = limiter.can_call("groq", emergency.model, estimated_tokens=estimate)
                         if allowed_emergency:
                             emergency_response, _ = await _call_provider(emergency, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens, tools=tools)
-                            if emergency_response.ok and emergency_response.text.strip():
+                            if emergency_response.ok and (emergency_response.text.strip() or emergency_response.tool_calls):
                                 attempts.append(_attempt_from_response(emergency_response, purpose, selected_provider="groq", fallback_used=True))
                                 return RoutedLLMResponse(response=emergency_response, attempts=attempts, fallback_occurred=True)
                             attempts.append(_attempt_from_response(emergency_response, purpose, fallback_used=True))
@@ -379,7 +382,7 @@ async def complete_with_fallback(
                 continue
 
         response, retryable = await _call_provider(provider, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens, tools=tools)
-        if response.ok and response.text.strip():
+        if response.ok and (response.text.strip() or response.tool_calls):
             selected = response.provider
             attempts.append(_attempt_from_response(response, purpose, selected_provider=selected, fallback_used=bool(attempts)))
             return RoutedLLMResponse(response=response, attempts=attempts, fallback_occurred=len(attempts) > 1)
@@ -392,7 +395,7 @@ async def complete_with_fallback(
                 allowed, reason = limiter.can_call("groq", emergency.model, estimated_tokens=estimate)
                 if allowed:
                     emergency_response, _ = await _call_provider(emergency, limiter, messages, purpose=purpose, temperature=temperature, max_tokens=max_tokens, tools=tools)
-                    if emergency_response.ok and emergency_response.text.strip():
+                    if emergency_response.ok and (emergency_response.text.strip() or emergency_response.tool_calls):
                         attempts.append(_attempt_from_response(emergency_response, purpose, selected_provider="groq", fallback_used=True))
                         return RoutedLLMResponse(response=emergency_response, attempts=attempts, fallback_occurred=True)
                     attempts.append(_attempt_from_response(emergency_response, purpose, fallback_used=True))

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import json
 import os
 import re
 from typing import Any
@@ -30,7 +32,6 @@ class GeminiProvider:
         max_tokens: int = 800,
         tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
-        # tools: native function-calling not yet wired for this provider
         if not self.available():
             return LLMResponse(provider=self.name, model=self.model, ok=False, error="missing_api_key")
 
@@ -40,6 +41,11 @@ class GeminiProvider:
             "contents": contents,
             "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens, "topP": 0.9},
         }
+        if tools:
+            gemini_tools = self._to_gemini_tools(tools)
+            if gemini_tools:
+                payload["tools"] = gemini_tools
+                payload["toolConfig"] = {"functionCallingConfig": {"mode": "AUTO"}}
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
         limiter = LLMRateLimiter()
         estimated_tokens = self._estimated_tokens(messages, max_tokens)
@@ -86,8 +92,10 @@ class GeminiProvider:
                         continue
                     return last_response
 
-                text = self._extract_text(response.json())
-                if text:
+                data = response.json()
+                text = self._extract_text(data)
+                tool_calls = self._extract_tool_calls(data) if tools else None
+                if text or tool_calls:
                     limiter.record_success(self.name, slot_model, estimated_tokens=estimated_tokens)
                     return LLMResponse(
                         provider=self.name,
@@ -96,6 +104,7 @@ class GeminiProvider:
                         ok=True,
                         status_code=response.status_code,
                         raw_headers=self._safe_headers(raw_headers),
+                        tool_calls=tool_calls,
                     )
 
                 last_response = LLMResponse(
@@ -156,6 +165,59 @@ class GeminiProvider:
                 if part.get("text"):
                     parts.append(part["text"])
         return "".join(parts).strip()
+
+    def _to_gemini_tools(self, openai_tools: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+        decls: list[dict[str, Any]] = []
+        for tool in openai_tools or []:
+            fn = tool.get("function", {}) or {}
+            name = fn.get("name")
+            if not name:
+                continue
+            decl: dict[str, Any] = {"name": name, "description": fn.get("description", "")}
+            params = self._sanitize_gemini_schema(fn.get("parameters") or {})
+            if params and params.get("properties"):
+                decl["parameters"] = params
+            decls.append(decl)
+        if not decls:
+            return None
+        return [{"function_declarations": decls}]
+
+    def _sanitize_gemini_schema(self, schema: Any) -> Any:
+        if not isinstance(schema, dict):
+            return schema
+        unsupported = {"additionalProperties", "$schema", "title", "default", "examples"}
+        result = copy.deepcopy(schema)
+        for key in unsupported:
+            result.pop(key, None)
+        if "required" in result and not result["required"]:
+            result.pop("required", None)
+        if "properties" in result and isinstance(result["properties"], dict):
+            result["properties"] = {
+                key: self._sanitize_gemini_schema(value) for key, value in result["properties"].items()
+            }
+        if "items" in result:
+            result["items"] = self._sanitize_gemini_schema(result["items"])
+        return result
+
+    def _extract_tool_calls(self, data: dict) -> list[dict[str, Any]] | None:
+        calls: list[dict[str, Any]] = []
+        for candidate in data.get("candidates", []) or []:
+            content = candidate.get("content", {}) or {}
+            for part in content.get("parts", []) or []:
+                fc = part.get("functionCall")
+                if not fc:
+                    continue
+                calls.append(
+                    {
+                        "id": f"call_{len(calls)}",
+                        "type": "function",
+                        "function": {
+                            "name": fc.get("name", ""),
+                            "arguments": json.dumps(fc.get("args") or {}),
+                        },
+                    }
+                )
+        return calls or None
 
     def _safe_headers(self, headers: dict[str, str]) -> dict[str, str]:
         keep = {"retry-after", "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "x-ratelimit-reset-after"}
