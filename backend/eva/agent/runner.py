@@ -5,7 +5,7 @@ from typing import Any
 
 from ..core.config import ModelSettings
 from ..core.web_context import remember_web_results
-from ..observability.context import task_trace
+from ..observability.context import task_trace, trace_threat
 from ..tools.registry import ToolRegistry
 from .cognition import build_initial_plan, reflect_on_step
 from .executor import ToolExecutor, ToolExecutionResult
@@ -26,6 +26,23 @@ from .policies import (
 )
 from .state import AgentRunState
 from .task import AgentStep, AgentTask
+from ..threat_defense.authorization import authorize_action
+from ..threat_defense.taint import assess as assess_taint, source_type_for_tool, wrap_as_untrusted_data
+
+
+def _is_privileged_tool(registry: ToolRegistry, tool_name: str) -> bool:
+    """A tool is privileged if the permission gate would gate it (confirm /
+    override / hard_block) rather than let it run immediately."""
+    try:
+        from ..security import tool_gate
+
+        spec = registry.get(tool_name)
+        if spec is None:
+            return False
+        return tool_gate.classify_tool_call(spec) in {"confirm", "override", "hard_block"}
+    except Exception:
+        # Fail safe: if we cannot classify, treat it as privileged.
+        return True
 
 
 def _safe_log(memory: Any, session_id: str | None, kind: str, payload: dict[str, Any]) -> None:
@@ -304,10 +321,51 @@ async def run_agentic_task(user_message: str, context: dict[str, Any] | None = N
                 _safe_log(memory, session_id, "agent_tool_dry_run", {"task_id": task.id, "step": index, "tool": call.tool, "args": call.args})
                 return _return_task(task, session_context, ok=True, events=events, safety_stops=safety_stops)
 
+            # Phase 40 moat: untrusted content proposes, it never authorizes. If
+            # injected/untrusted content has entered the task context and the
+            # next action is privileged, it cannot run on that content's say-so —
+            # escalate to explicit user confirmation carrying an injection
+            # warning. The permission gate still governs it too.
+            privileged = _is_privileged_tool(registry, call.tool)
+            auth = authorize_action(
+                tool_privileged=privileged,
+                context_tainted=state.injection_flagged,
+                injection_detected=state.injection_flagged,
+            )
+            if auth.escalate:
+                warning = (
+                    f"WARNING - possible prompt injection: `{call.tool}` was proposed after untrusted "
+                    f"content ({', '.join(state.tainted_sources) or 'external source'}) entered the "
+                    f"conversation. Untrusted content can suggest actions but cannot authorize them. "
+                    f"Confirm explicitly if you want me to run this."
+                )
+                step.status = "skipped"
+                step.observation = warning
+                task.add_observation(warning)
+                task.status = "waiting_for_confirmation"
+                task.final_response = warning
+                safety_stops.append("injection_authorization_blocked")
+                events.append({"type": "agent_threat", "task_id": task.id, "step": index, "message": warning})
+                trace_threat({"tool": call.tool, "action": "escalate", **auth.as_dict(), "sources": list(state.tainted_sources)})
+                _safe_log(memory, session_id, "agent_injection_escalation", {"task_id": task.id, "step": index, "tool": call.tool, "reason": auth.reason})
+                return _return_task(task, session_context, ok=False, requires_confirmation=True, action=call.tool, events=events, safety_stops=safety_stops)
+
             result = executor.execute(call)
             if call.tool in {"web_search", "browser_search"} and result.ok:
                 remember_web_results(session_context, result.result)
             observation = _observation_text(call, result)
+            # Phase 40 taint-tracking: if this tool's result is untrusted external
+            # content carrying injection markers, fence it as data, flag the task
+            # context, and record the threat so a later privileged step escalates.
+            source_type = source_type_for_tool(call.tool)
+            if result.ok and result.result is not None:
+                verdict = assess_taint(result.result, source_type)
+                if verdict.injection_detected:
+                    state.record_injection(source_type)
+                    observation = wrap_as_untrusted_data(observation, source_type)
+                    events.append({"type": "agent_threat", "task_id": task.id, "step": index, "message": verdict.summary})
+                    trace_threat({"tool": call.tool, "action": "taint", **verdict.as_dict()})
+                    _safe_log(memory, session_id, "agent_untrusted_content_flagged", {"task_id": task.id, "step": index, "tool": call.tool, "verdict": verdict.as_dict()})
             step.observation = observation
             step.status = "done" if result.ok else "failed"
             step.error = result.error

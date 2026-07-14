@@ -153,6 +153,19 @@ def trace_verification(tool_name: str, verification: dict[str, Any]) -> None:
         return
 
 
+def trace_threat(threat: dict[str, Any]) -> None:
+    """Record a detected prompt-injection / taint threat for the active task."""
+    trace_id = _active_trace_id()
+    if not trace_id:
+        return
+    try:
+        from . import traces
+
+        traces.log_threat(trace_id, threat or {})
+    except Exception:
+        return
+
+
 def summarize_result(result: Any, limit: int = 240) -> str:
     """Best-effort compact string for a tool result, safe for any input.
 

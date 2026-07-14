@@ -20,6 +20,11 @@ class AgentRunState:
     successes: int = 0
     failures: int = 0
     last_error: str | None = None
+    # Phase 40 taint-tracking: whether injected/untrusted content has entered
+    # the task context (so a later privileged action can be escalated, never
+    # auto-authorized on the untrusted content's say-so).
+    injection_flagged: bool = False
+    tainted_sources: list[str] = field(default_factory=list)
 
     def repeated_without_progress(self, call: PlannedToolCall) -> bool:
         signature = tool_signature(call)
@@ -53,6 +58,12 @@ class AgentRunState:
         self.consecutive_failures += 1
         self.steps_since_progress += 1
         self.last_error = error
+
+    def record_injection(self, source_type: str) -> None:
+        """Mark that injected/untrusted content has entered the task context."""
+        self.injection_flagged = True
+        if source_type and source_type not in self.tainted_sources:
+            self.tainted_sources.append(source_type)
 
     def failure_budget_exceeded(self, limit: int) -> bool:
         return self.consecutive_failures >= limit

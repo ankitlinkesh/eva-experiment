@@ -144,6 +144,13 @@ def _agent_recovers_or_stops_within_budget(ctx: EvalContext) -> tuple[bool, str]
     return True, "an always-failing planner stopped honestly within the failure budget, and a fail-then-done planner recovered to ok=True"
 
 
+def _injection_red_team_all_neutralized(ctx: EvalContext) -> tuple[bool, str]:
+    from ..threat_defense.red_team import run_red_team
+
+    report = run_red_team()
+    return report.all_passed, report.summary_text()
+
+
 def offline_tasks() -> list[EvalTask]:
     """The deterministic, offline eval suite run in CI on every commit."""
     return [
@@ -188,5 +195,11 @@ def offline_tasks() -> list[EvalTask]:
             description="The agent loop recovers from a single failed step but stops honestly within the failure budget when steps keep failing.",
             category="reliability",
             check=_agent_recovers_or_stops_within_budget,
+        ),
+        EvalTask(
+            id="injection_red_team_all_neutralized",
+            description="Every classic prompt-injection red-team payload is flagged as an injection and forces a privileged action to escalate.",
+            category="security",
+            check=_injection_red_team_all_neutralized,
         ),
     ]

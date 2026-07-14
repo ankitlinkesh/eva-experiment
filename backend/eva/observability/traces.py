@@ -37,6 +37,10 @@ def log_verification(trace_id: str, verification: dict[str, Any], root: Path | N
     _store(root).append(trace_id, "verification", verification)
 
 
+def log_threat(trace_id: str, threat: dict[str, Any], root: Path | None = None) -> None:
+    _store(root).append(trace_id, "threat", threat)
+
+
 def log_dry_run_preview(trace_id: str, payload: dict[str, Any], root: Path | None = None) -> None:
     _store(root).append(trace_id, "dry_run_preview", payload)
 
