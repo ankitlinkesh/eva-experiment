@@ -11,6 +11,11 @@ DEFAULT_MAX_AGENT_STEPS = 6
 DEFAULT_MAX_TOOLS_PER_TASK = 10
 DEFAULT_MAX_WEB_SEARCHES_PER_TASK = 4
 DEFAULT_MAX_SCREEN_CAPTURES_PER_TASK = 2
+# Phase 39 reliability budgets: how many consecutive failed steps to tolerate
+# (attempting recovery/replan between them) before stopping honestly, and how
+# many steps without progress before declaring a stall.
+DEFAULT_MAX_CONSECUTIVE_FAILURES = 2
+DEFAULT_MAX_STEPS_WITHOUT_PROGRESS = 3
 
 POWER_TOOLS = {"guarded_power_action", "system_power"}
 WORKSPACE_TOOLS = {"workspace_status", "workspace_list_files", "workspace_read_file", "workspace_search", "workspace_summarize_file", "workspace_project_summary"}
@@ -109,6 +114,14 @@ def max_web_searches_per_task() -> int:
 
 def max_screen_captures_per_task() -> int:
     return max(0, env_int("MAX_SCREEN_CAPTURES_PER_TASK", DEFAULT_MAX_SCREEN_CAPTURES_PER_TASK))
+
+
+def max_consecutive_failures() -> int:
+    return max(1, env_int("EVA_AGENT_MAX_CONSECUTIVE_FAILURES", DEFAULT_MAX_CONSECUTIVE_FAILURES))
+
+
+def max_steps_without_progress() -> int:
+    return max(1, env_int("EVA_AGENT_MAX_STEPS_WITHOUT_PROGRESS", DEFAULT_MAX_STEPS_WITHOUT_PROGRESS))
 
 
 def agentic_goal(message: str) -> str:

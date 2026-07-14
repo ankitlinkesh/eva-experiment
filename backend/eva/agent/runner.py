@@ -17,7 +17,9 @@ from .policies import (
     explicitly_requests_screen,
     is_unsupported_capability,
     max_agent_steps,
+    max_consecutive_failures,
     max_screen_captures_per_task,
+    max_steps_without_progress,
     max_tools_per_task,
     max_web_searches_per_task,
     tool_signature,
@@ -150,7 +152,11 @@ async def run_agentic_task(user_message: str, context: dict[str, Any] | None = N
         )
         task.plan = build_initial_plan(goal)
         state = AgentRunState()
-        planner = ToolCallPlanner(settings, registry)
+        # Injectable planner is the testability seam that lets the reliability of
+        # the plan->act->observe->reflect loop be driven deterministically (P39).
+        planner = context.get("planner") or ToolCallPlanner(settings, registry)
+        max_failures = max_consecutive_failures()
+        max_no_progress = max_steps_without_progress()
         events: list[dict[str, Any]] = [
             {"type": "agent_task", "task_id": task.id, "message": "Agent task started"},
             {"type": "agent_plan", "task_id": task.id, "plan": list(task.plan), "message": "Plan ready"},
@@ -324,12 +330,49 @@ async def run_agentic_task(user_message: str, context: dict[str, Any] | None = N
             _safe_log(memory, session_id, "agent_tool_executed", {"task_id": task.id, "step": index, "tool": call.tool, "args": call.args, "result": _compact_tool_result(result)})
             _safe_log(memory, session_id, "agent_step_reflection", {"task_id": task.id, "step": index, "reflection": reflection.as_dict()})
 
+            # Phase 39: track reliability. A successful step resets the failure
+            # streak; a step whose post-condition was independently verified
+            # (Phase 38) counts as proven progress.
+            if result.ok:
+                verified = bool(
+                    result.verification
+                    and result.verification.get("independent")
+                    and result.verification.get("verified")
+                )
+                state.record_success(verified)
+
+            # Phase 39: a failed step no longer kills the task outright. Record
+            # the failure, feed it back as an observation, and attempt bounded
+            # recovery — the loop replans until the consecutive-failure budget or
+            # a stall guard is hit, then stops honestly instead of burning every
+            # step or over-claiming success.
             if reflection.status == "blocked":
-                task.status = "failed"
-                task.final_response = observation
-                safety_stops.append("reflection_blocked")
-                _safe_log(memory, session_id, "agent_task_failed", {"task_id": task.id, "reason": "reflection_blocked", "observation": observation})
-                return _return_task(task, session_context, ok=False, events=events, safety_stops=safety_stops)
+                state.record_failure(result.error)
+                recovery = f"Attempt at step {index} failed: {result.error or observation}. I'll try a different safe approach."
+                task.add_observation(recovery)
+                events.append({"type": "agent_recovery", "task_id": task.id, "step": index, "message": recovery})
+                _safe_log(
+                    memory,
+                    session_id,
+                    "agent_step_failed_recovering",
+                    {"task_id": task.id, "step": index, "error": result.error, "consecutive_failures": state.consecutive_failures},
+                )
+                if state.failure_budget_exceeded(max_failures):
+                    task.status = "failed"
+                    task.final_response = (
+                        f"I couldn't complete this after {state.consecutive_failures} failed attempts. "
+                        f"Last issue: {result.error or observation}"
+                    )
+                    safety_stops.append("failure_budget_exceeded")
+                    _safe_log(memory, session_id, "agent_task_failed", {"task_id": task.id, "reason": "failure_budget_exceeded", "observation": observation})
+                    return _return_task(task, session_context, ok=False, events=events, safety_stops=safety_stops)
+                if state.stalled(max_no_progress):
+                    task.status = "failed"
+                    task.final_response = "I stopped because I wasn't making progress toward the goal."
+                    safety_stops.append("no_progress")
+                    _safe_log(memory, session_id, "agent_task_failed", {"task_id": task.id, "reason": "no_progress", "observation": observation})
+                    return _return_task(task, session_context, ok=False, events=events, safety_stops=safety_stops)
+                continue
 
             if reflection.status == "needs_confirmation":
                 task.status = "waiting_for_confirmation"

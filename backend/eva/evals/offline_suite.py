@@ -91,6 +91,59 @@ def _post_condition_verification_is_independent(ctx: EvalContext) -> tuple[bool,
     return True, "verify_tool_effect independently confirmed a present token and caught a false claim about an absent one"
 
 
+def _agent_recovers_or_stops_within_budget(ctx: EvalContext) -> tuple[bool, str]:
+    import asyncio
+
+    from ..agent.planner import PlannedToolCall, PlannerDecision
+    from ..agent.policies import max_agent_steps
+    from ..agent.runner import run_agentic_task
+
+    class _ScriptedPlanner:
+        def __init__(self, decisions):
+            self._decisions = list(decisions)
+            self.calls = 0
+
+        async def plan(self, goal, history, mode="agent_step", task_context=None):
+            decision = self._decisions[min(self.calls, len(self._decisions) - 1)]
+            self.calls += 1
+            return decision
+
+    failing = PlannerDecision(
+        type="tool_calls",
+        reason="x",
+        tool_calls=[PlannedToolCall(tool="definitely_not_a_tool", args={})],
+        final_response="",
+        continue_after_tools=True,
+    )
+    done = PlannerDecision(
+        type="done",
+        reason="done",
+        tool_calls=[],
+        final_response="All set.",
+        continue_after_tools=False,
+    )
+
+    always_fail = asyncio.run(
+        run_agentic_task("multi step goal", {"planner": _ScriptedPlanner([failing]), "execute_tools": True})
+    )
+    if always_fail.get("ok") is not False:
+        return False, f"an always-failing planner must not report ok=True, got {always_fail.get('ok')!r}"
+    if "failure_budget_exceeded" not in (always_fail.get("safety_stops") or []):
+        return False, f"an always-failing planner must stop via failure_budget_exceeded, got {always_fail.get('safety_stops')!r}"
+    if always_fail.get("steps_count", 0) > max_agent_steps():
+        return False, f"an always-failing planner must stop before max_agent_steps(), got steps_count={always_fail.get('steps_count')!r}"
+
+    recovers = asyncio.run(
+        run_agentic_task("multi step goal", {"planner": _ScriptedPlanner([failing, done]), "execute_tools": True})
+    )
+    if recovers.get("ok") is not True:
+        return False, f"a fail-then-done planner must recover to ok=True, got {recovers.get('ok')!r}"
+    if recovers.get("status") != "done":
+        return False, f"a fail-then-done planner must recover to status=done, got {recovers.get('status')!r}"
+
+    return True, "an always-failing planner stopped honestly within the failure budget, and a fail-then-done planner recovered to ok=True"
+
+
 def offline_tasks() -> list[EvalTask]:
     """The deterministic, offline eval suite run in CI on every commit."""
     return [
@@ -129,5 +182,11 @@ def offline_tasks() -> list[EvalTask]:
             description="An independent post-condition confirms a present file effect and catches a false claim about an absent one.",
             category="verification",
             check=_post_condition_verification_is_independent,
+        ),
+        EvalTask(
+            id="agent_recovers_or_stops_within_budget",
+            description="The agent loop recovers from a single failed step but stops honestly within the failure budget when steps keep failing.",
+            category="reliability",
+            check=_agent_recovers_or_stops_within_budget,
         ),
     ]

@@ -78,6 +78,7 @@ FULL_VERIFIERS = [
     "verify_eva_phase37_activation.py",
     "verify_eva_phase37_exercise.py",
     "verify_eva_phase38_verification.py",
+    "verify_eva_phase39_reliability.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -131,6 +132,7 @@ QUICK_VERIFIERS = [
     "verify_eva_phase37_activation.py",
     "verify_eva_phase37_exercise.py",
     "verify_eva_phase38_verification.py",
+    "verify_eva_phase39_reliability.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -148,6 +150,7 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_phase37_activation.py": ("phase37", "activation", "turn-on"),
     "verify_eva_phase37_exercise.py": ("phase37", "exercise", "friction"),
     "verify_eva_phase38_verification.py": ("phase38", "verification", "provenance"),
+    "verify_eva_phase39_reliability.py": ("phase39", "reliability", "recovery"),
 }
 
 

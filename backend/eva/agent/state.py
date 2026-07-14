@@ -13,6 +13,13 @@ class AgentRunState:
     screen_captures: int = 0
     invalid_json_errors: int = 0
     signatures: list[str] = field(default_factory=list)
+    # Phase 39 reliability tracking.
+    consecutive_failures: int = 0
+    steps_since_progress: int = 0
+    verified_successes: int = 0
+    successes: int = 0
+    failures: int = 0
+    last_error: str | None = None
 
     def repeated_without_progress(self, call: PlannedToolCall) -> bool:
         signature = tool_signature(call)
@@ -28,3 +35,27 @@ class AgentRunState:
 
     def record_invalid_json(self) -> None:
         self.invalid_json_errors += 1
+
+    def record_success(self, verified: bool = False) -> None:
+        """A step succeeded: the failure streak and stall counter reset. A step
+        whose post-condition was *independently* verified (Phase 38) counts as
+        real, proven progress."""
+        self.successes += 1
+        self.consecutive_failures = 0
+        self.steps_since_progress = 0
+        if verified:
+            self.verified_successes += 1
+
+    def record_failure(self, error: str | None = None) -> None:
+        """A step failed: extend the consecutive-failure streak so the loop can
+        try to recover a bounded number of times before stopping honestly."""
+        self.failures += 1
+        self.consecutive_failures += 1
+        self.steps_since_progress += 1
+        self.last_error = error
+
+    def failure_budget_exceeded(self, limit: int) -> bool:
+        return self.consecutive_failures >= limit
+
+    def stalled(self, limit: int) -> bool:
+        return self.steps_since_progress >= limit
