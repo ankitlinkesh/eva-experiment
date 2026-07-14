@@ -3,8 +3,16 @@ from __future__ import annotations
 from typing import Any
 
 from ..tools.registry import ToolRegistry, ToolSpec, register_mcp_tool_specs
-from . import client
+from . import client, trust
 from .config import McpServerConfig, load_mcp_config, mcp_enabled
+
+
+def _mcp_call_with_budget(server: McpServerConfig, tool_name: str, kwargs: dict[str, Any]) -> Any:
+    """Phase 40c: enforce the per-server call budget before invoking an MCP tool."""
+    if trust.budget_exceeded(server.name):
+        return {"ok": False, "blocked": True, "error": f"MCP server '{server.name}' exceeded its per-server call budget."}
+    trust.record_call(server.name)
+    return client.call_tool(server, tool_name, kwargs)
 
 
 def _schema_or_default(schema: Any) -> dict[str, Any]:
@@ -18,8 +26,12 @@ def build_mcp_tool_specs(servers: list[McpServerConfig]) -> dict[str, ToolSpec]:
     ToolSpecs for them. Every MCP tool is confirm-class: safety_level is
     "sensitive" and requires_confirmation is True, so the tool gate always
     routes it through confirmation and it never auto-executes. One bad
-    server's discovery failure does not abort the others."""
+    server's discovery failure does not abort the others.
+
+    Phase 40c: only servers trusted under the MCP trust model are registered —
+    an untrusted (unpinned) server's tools are never exposed to the agent."""
     specs: dict[str, ToolSpec] = {}
+    servers = trust.filter_trusted(list(servers))
     for server in servers:
         try:
             discovered = client.discover_tools(server)
@@ -37,7 +49,7 @@ def build_mcp_tool_specs(servers: list[McpServerConfig]) -> dict[str, ToolSpec]:
                     description=description,
                     args_schema=args_schema,
                     safety_level="sensitive",
-                    handler=lambda _s=server, _t=tool_name, **kwargs: client.call_tool(_s, _t, kwargs),
+                    handler=lambda _s=server, _t=tool_name, **kwargs: _mcp_call_with_budget(_s, _t, kwargs),
                     category="mcp",
                     risk="medium",
                     action_type="MCP_TOOL_CALL",

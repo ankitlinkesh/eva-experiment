@@ -28,6 +28,7 @@ from .state import AgentRunState
 from .task import AgentStep, AgentTask
 from ..threat_defense.authorization import authorize_action
 from ..threat_defense.taint import assess as assess_taint, source_type_for_tool, wrap_as_untrusted_data
+from ..threat_defense.tool_scope import TaskToolScope
 
 
 def _is_privileged_tool(registry: ToolRegistry, tool_name: str) -> bool:
@@ -174,6 +175,10 @@ async def run_agentic_task(user_message: str, context: dict[str, Any] | None = N
         planner = context.get("planner") or ToolCallPlanner(settings, registry)
         max_failures = max_consecutive_failures()
         max_no_progress = max_steps_without_progress()
+        # Phase 40c least-privilege: an optional per-task allowlist. Unset =
+        # unrestricted (backward compatible); a caller passes context["tool_scope"]
+        # (list/set of tool names or "prefix*" wildcards) to lock the task down.
+        tool_scope = TaskToolScope.of(context.get("tool_scope"))
         events: list[dict[str, Any]] = [
             {"type": "agent_task", "task_id": task.id, "message": "Agent task started"},
             {"type": "agent_plan", "task_id": task.id, "plan": list(task.plan), "message": "Plan ready"},
@@ -320,6 +325,21 @@ async def run_agentic_task(user_message: str, context: dict[str, Any] | None = N
                 events.append({"type": "agent_observation", "task_id": task.id, "step": index, "message": step.observation})
                 _safe_log(memory, session_id, "agent_tool_dry_run", {"task_id": task.id, "step": index, "tool": call.tool, "args": call.args})
                 return _return_task(task, session_context, ok=True, events=events, safety_stops=safety_stops)
+
+            # Phase 40c least-privilege: if this task was handed a tool scope, a
+            # planned tool outside it is denied before it runs — no matter what
+            # the planner proposed. Unscoped tasks stay unrestricted.
+            if not tool_scope.is_allowed(call.tool):
+                denial = f"`{call.tool}` is outside this task's allowed tool scope, so I won't run it."
+                step.status = "skipped"
+                step.observation = denial
+                task.add_observation(denial)
+                task.status = "failed"
+                task.final_response = denial
+                safety_stops.append(f"out_of_scope:{call.tool}")
+                events.append({"type": "agent_threat", "task_id": task.id, "step": index, "message": denial})
+                _safe_log(memory, session_id, "agent_out_of_scope", {"task_id": task.id, "step": index, "tool": call.tool})
+                return _return_task(task, session_context, ok=False, events=events, safety_stops=safety_stops)
 
             # Phase 40 moat: untrusted content proposes, it never authorizes. If
             # injected/untrusted content has entered the task context and the

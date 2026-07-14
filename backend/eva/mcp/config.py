@@ -21,6 +21,7 @@ class McpServerConfig:
     url: str = ""
     env: dict[str, str] | None = None
     enabled: bool = True
+    trusted: bool = False  # Phase 40c: pin a server as trusted in its config entry.
 
 
 def mcp_enabled() -> bool:
@@ -89,6 +90,7 @@ def load_mcp_config() -> list[McpServerConfig]:
                 url=str(entry.get("url") or ""),
                 env=env,
                 enabled=bool(entry.get("enabled", True)),
+                trusted=bool(entry.get("trusted", False)),
             )
         except (TypeError, ValueError, AttributeError):
             continue
