@@ -75,6 +75,8 @@ FULL_VERIFIERS = [
     "verify_eva_stabilization_v1.py",
     "verify_eva_phase36_observability.py",
     "verify_eva_phase36_evals.py",
+    "verify_eva_phase37_activation.py",
+    "verify_eva_phase37_exercise.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -125,6 +127,8 @@ QUICK_VERIFIERS = [
     "verify_eva_file_agent_real_apply_gate.py",
     "verify_eva_phase36_observability.py",
     "verify_eva_phase36_evals.py",
+    "verify_eva_phase37_activation.py",
+    "verify_eva_phase37_exercise.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -139,6 +143,8 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_all.py": ("phase40", "verifier-dashboard", "profiles"),
     "verify_eva_phase36_observability.py": ("phase36", "observability", "tracing"),
     "verify_eva_phase36_evals.py": ("phase36", "evals", "benchmarks"),
+    "verify_eva_phase37_activation.py": ("phase37", "activation", "turn-on"),
+    "verify_eva_phase37_exercise.py": ("phase37", "exercise", "friction"),
 }
 
 

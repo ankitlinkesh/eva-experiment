@@ -352,6 +352,37 @@ def _format_evals_status() -> str:
     return "\n".join(lines)
 
 
+def _format_activation_status() -> str:
+    from ..runtime.activation import current_activation_status
+
+    status = current_activation_status()
+    mind = status["mind"]
+    hands = status["hands_external"]
+
+    def _state(flag: bool) -> str:
+        return "ON" if flag else "off"
+
+    lines = [
+        f"Activation profile: {status['profile']} (set EVA_PROFILE to change).",
+        "Mind capabilities (a profile may enable these):",
+        f"- tracing: {_state(mind['tracing'])}",
+        f"- vector_memory: {_state(mind['vector_memory'])}",
+        f"- native_function_calling: {_state(mind['native_function_calling'])}",
+        "Hands & external (manual only — never auto-enabled by a profile):",
+        f"- real_input: {_state(hands['real_input'])}",
+        f"- browser: {_state(hands['browser'])}",
+        f"- mcp: {_state(hands['mcp'])}",
+        str(status["note"]),
+    ]
+    return "\n".join(lines)
+
+
+def _format_exercise_status() -> str:
+    from ..evals import run_offline_exercise
+
+    return run_offline_exercise().summary_text()
+
+
 def _format_automation_adapters_status() -> str:
     from ..browser_automation.playwright_driver import playwright_status
     from ..desktop_automation.pyautogui_driver import pyautogui_status
@@ -4187,6 +4218,12 @@ def maybe_handle_fast_command(
 
     if normalized in {"evals status", "eval status", "run evals", "evals run"}:
         return _format_evals_status(), "fast-command"
+
+    if normalized in {"activation status", "profile status", "capability activation status"}:
+        return _format_activation_status(), "fast-command"
+
+    if normalized in {"exercise run", "run exercise", "friction report", "exercise status"}:
+        return _format_exercise_status(), "fast-command"
 
     trace_show_match = re.match(r"^(?:traces show|show trace)\s+(.+)$", original, flags=re.IGNORECASE)
     if trace_show_match:

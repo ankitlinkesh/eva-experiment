@@ -31,8 +31,24 @@ def _load_mcp_tools_if_enabled() -> None:
         pass
 
 
+def _apply_activation_profile() -> None:
+    """Apply the EVA_PROFILE activation profile at startup.
+
+    Default profile is 'safe' (a pure no-op), so unless an operator opts into a
+    profile this is byte-identical to before. A profile only ever fills in
+    unset capability flags and never auto-enables real input, browser, or MCP.
+    Wrapped so a bad EVA_PROFILE value can never block or crash startup."""
+    try:
+        from .runtime.activation import activate_profile
+
+        activate_profile()
+    except Exception:
+        pass
+
+
 def create_app() -> FastAPI:
     load_project_env(ROOT)
+    _apply_activation_profile()
     _load_mcp_tools_if_enabled()
     settings = load_settings(ROOT / "config" / "eva.toml")
     app = FastAPI(title="Eva Agent", version="0.1.0")

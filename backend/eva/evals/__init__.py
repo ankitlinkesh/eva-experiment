@@ -8,6 +8,7 @@ agent benchmarks.
 from __future__ import annotations
 
 from .benchmarks import BenchmarkAdapter, benchmark_adapters
+from .exercise import ExerciseScenario, FrictionReport, offline_scenarios, run_offline_exercise
 from .harness import EvalHarness, run_offline_evals
 from .models import EvalContext, EvalReport, EvalResult, EvalTask
 from .offline_suite import offline_tasks
@@ -22,4 +23,8 @@ __all__ = [
     "run_offline_evals",
     "BenchmarkAdapter",
     "benchmark_adapters",
+    "ExerciseScenario",
+    "FrictionReport",
+    "offline_scenarios",
+    "run_offline_exercise",
 ]

@@ -65,6 +65,33 @@ def build_capability_truth(registry: ToolRegistry | None = None) -> dict[str, An
     }
 
 
+def _activation_lines() -> list[str]:
+    """Activation-profile truth (Phase 37), derived from live env state.
+
+    Reports the active EVA_PROFILE and which side-effect-free "mind" capabilities
+    it turned on, and states plainly that a profile never auto-enables Eva's
+    hands or external reach (real input / browser / MCP) — those stay opt-in.
+    """
+    from ..runtime.activation import current_activation_status
+
+    status = current_activation_status()
+    mind = status["mind"]
+
+    def _state(flag: bool) -> str:
+        return "ON" if flag else "off"
+
+    return [
+        f"Activation profile: {status['profile']} (EVA_PROFILE). A profile enables only",
+        "side-effect-free 'mind' capabilities, never Eva's hands or external reach.",
+        f"- mind: tracing={_state(mind['tracing'])}, "
+        f"vector_memory={_state(mind['vector_memory'])}, "
+        f"native_function_calling={_state(mind['native_function_calling'])}.",
+        "- real input / browser / MCP are never auto-enabled by a profile; they remain",
+        "  opt-in one flag at a time and are still governed by the permission gate.",
+        "",
+    ]
+
+
 def format_capability_truth(registry: ToolRegistry | None = None) -> str:
     data = build_capability_truth(registry)
     counts = data["counts"]
@@ -94,6 +121,7 @@ def format_capability_truth(registry: ToolRegistry | None = None) -> str:
         "(EVA_V2_PLAYWRIGHT_ENABLED).",
         "- When enabled, navigation is restricted to public http(s) hosts (no localhost/private targets).",
         "",
+        *_activation_lines(),
         "Approval flow: a gated call returns a pending-action ledger id; only a user-typed",
         "`confirm <id>` / `confirm override <id>` executes it via ToolRegistry.run_approved().",
         "",
