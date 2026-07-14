@@ -73,6 +73,8 @@ FULL_VERIFIERS = [
     "verify_eva_planner_v3_quality.py",
     "verify_eva_capability_resource_mapping.py",
     "verify_eva_stabilization_v1.py",
+    "verify_eva_phase36_observability.py",
+    "verify_eva_phase36_evals.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -121,6 +123,8 @@ QUICK_VERIFIERS = [
     "verify_eva_post_push_demo_smoke.py",
     "verify_eva_phase33_roadmap_foundations.py",
     "verify_eva_file_agent_real_apply_gate.py",
+    "verify_eva_phase36_observability.py",
+    "verify_eva_phase36_evals.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -133,6 +137,8 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_post_push_demo_smoke.py": ("phase32", "release", "demo-smoke"),
     "verify_eva_phase33_roadmap_foundations.py": ("phase33", "roadmap", "safety-boundary", "catalog"),
     "verify_eva_all.py": ("phase40", "verifier-dashboard", "profiles"),
+    "verify_eva_phase36_observability.py": ("phase36", "observability", "tracing"),
+    "verify_eva_phase36_evals.py": ("phase36", "evals", "benchmarks"),
 }
 
 

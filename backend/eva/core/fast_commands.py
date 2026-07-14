@@ -308,6 +308,50 @@ def _format_traces_status() -> str:
     )
 
 
+def _format_traces_list() -> str:
+    from ..observability.traces import list_traces
+
+    traces = list_traces(limit=10)
+    if not traces:
+        return "No recent traces found. Tracing is off by default; enable EVA_TRACING_ENABLED to record traces."
+    lines = ["Recent traces:"]
+    for trace in traces:
+        request = str(trace.get("request") or "").strip()
+        if len(request) > 80:
+            request = request[:80] + "…"
+        lines.append(f"- {trace.get('trace_id')} ({trace.get('event_count')} events): {request or '(no request captured)'}")
+    return "\n".join(lines)
+
+
+def _format_trace_show(trace_id: str) -> str:
+    from ..observability.traces import read_trace
+
+    trace = read_trace(trace_id)
+    if not trace.get("found"):
+        return f"No trace found for `{trace_id}`."
+    lines = [f"Trace {trace_id}:"]
+    for event in trace.get("events", []):
+        event_type = str(event.get("type") or "unknown")
+        payload = event.get("payload")
+        preview = json.dumps(payload, ensure_ascii=False, default=str) if payload is not None else ""
+        if len(preview) > 120:
+            preview = preview[:120] + "…"
+        lines.append(f"- {event_type}: {preview}")
+    return "\n".join(lines)
+
+
+def _format_evals_status() -> str:
+    from ..evals import benchmark_adapters, run_offline_evals
+
+    report = run_offline_evals()
+    lines = [report.summary_text()]
+    lines.append("Benchmark availability (all inert/gated unless explicitly opted in via env flags):")
+    for adapter in benchmark_adapters():
+        status = adapter.availability()
+        lines.append(f"- {status.get('name')}: available={status.get('available')} ({status.get('reason')})")
+    return "\n".join(lines)
+
+
 def _format_automation_adapters_status() -> str:
     from ..browser_automation.playwright_driver import playwright_status
     from ..desktop_automation.pyautogui_driver import pyautogui_status
@@ -4137,6 +4181,16 @@ def maybe_handle_fast_command(
 
     if normalized in {"traces status", "trace status", "last trace status"}:
         return _format_traces_status(), "fast-command"
+
+    if normalized in {"traces list", "list traces", "recent traces"}:
+        return _format_traces_list(), "fast-command"
+
+    if normalized in {"evals status", "eval status", "run evals", "evals run"}:
+        return _format_evals_status(), "fast-command"
+
+    trace_show_match = re.match(r"^(?:traces show|show trace)\s+(.+)$", original, flags=re.IGNORECASE)
+    if trace_show_match:
+        return _format_trace_show(trace_show_match.group(1).strip()), "fast-command"
 
     if normalized in {"automation adapters status", "automation adapter status", "browser automation status", "desktop automation status"}:
         return _format_automation_adapters_status(), "fast-command"

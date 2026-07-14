@@ -1428,6 +1428,12 @@ class ToolRegistry:
         call_args = {key: value for key, value in kwargs.items() if key not in {"confirmed", "_approved"}}
 
         decision = tool_gate.classify_tool_call(spec)
+        # Flight recorder: record the gate's classification. Inert (no-op, no
+        # file write) unless EVA_TRACING_ENABLED and an active trace exist; it
+        # never raises and never influences the gate's control flow below.
+        from ..observability.context import trace_gate_decision
+
+        trace_gate_decision(name, decision, spec)
         if decision == "hard_block":
             return {
                 "ok": False,
@@ -1462,7 +1468,14 @@ class ToolRegistry:
 
     def _invoke(self, spec: ToolSpec, args: dict[str, Any]) -> Any:
         result = spec.handler(**args)
-        return asdict(result) if hasattr(result, "__dataclass_fields__") else result
+        payload = asdict(result) if hasattr(result, "__dataclass_fields__") else result
+        # Flight recorder: record the actual invocation and a compact result
+        # summary. Inert unless tracing is enabled with an active trace; wrapped
+        # helper never raises, so it cannot affect the value returned to callers.
+        from ..observability.context import summarize_result, trace_tool_call
+
+        trace_tool_call(spec.name, args, summarize_result(payload))
+        return payload
 
     def _create_gated_pending(self, name: str, spec: ToolSpec, decision: str, args: dict[str, Any]) -> dict[str, Any]:
         from ..permissions.ledger import create_pending_action

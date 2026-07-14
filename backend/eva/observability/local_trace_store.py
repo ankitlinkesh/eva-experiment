@@ -41,3 +41,41 @@ class LocalTraceStore:
     def status(self) -> dict[str, Any]:
         count = len(list(self.root.glob("*.jsonl"))) if self.root.exists() else 0
         return {"ok": True, "backend": "local", "path": str(self.root), "trace_files": count}
+
+    def list_trace_ids(self, limit: int = 20) -> list[str]:
+        """Trace ids for recent trace files, newest first, capped at ``limit``.
+
+        Fail-safe: any filesystem error (missing root, permission issues) is
+        swallowed and yields an empty list rather than raising into a caller.
+        """
+        try:
+            if not self.root.exists():
+                return []
+            files = sorted(self.root.glob("*.jsonl"), key=lambda path: path.stat().st_mtime, reverse=True)
+            return [path.stem for path in files[: max(0, limit)]]
+        except Exception:
+            return []
+
+    def read(self, trace_id: str) -> list[dict]:
+        """Parsed JSONL events for ``trace_id``, or ``[]`` if unreadable.
+
+        Uses the same filename rule as :meth:`path_for`. Malformed lines are
+        skipped rather than raising, matching the fail-safe convention.
+        """
+        try:
+            path = self.path_for(trace_id)
+            if not path.exists():
+                return []
+            events: list[dict] = []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(event, dict):
+                    events.append(event)
+            return events
+        except Exception:
+            return []

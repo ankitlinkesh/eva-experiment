@@ -73,3 +73,32 @@ def traces_status() -> dict[str, Any]:
     status = _store().status()
     status["message"] = "Traces status: local JSONL trace store is active; remote tracing is disabled unless explicitly configured."
     return status
+
+
+def list_traces(limit: int = 20, root: Path | None = None) -> list[dict]:
+    store = _store(root)
+    summaries: list[dict] = []
+    for trace_id in store.list_trace_ids(limit):
+        events = store.read(trace_id)
+        request = ""
+        final_summary = ""
+        for event in events:
+            if event.get("type") == "trace_started":
+                request = (event.get("payload") or {}).get("user_request", "")
+            elif event.get("type") == "trace_ended":
+                final_summary = (event.get("payload") or {}).get("final_summary", "")
+        summaries.append(
+            {
+                "trace_id": trace_id,
+                "path": str(store.path_for(trace_id)),
+                "event_count": len(events),
+                "request": request,
+                "final_summary": final_summary,
+            }
+        )
+    return summaries
+
+
+def read_trace(trace_id: str, root: Path | None = None) -> dict:
+    events = _store(root).read(trace_id)
+    return {"trace_id": trace_id, "found": bool(events), "events": events}

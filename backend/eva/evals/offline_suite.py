@@ -1,0 +1,98 @@
+"""Deterministic, CI-safe eval tasks (Phase 36b).
+
+Every task below is a real post-condition check against the live tool gate
+(``ToolRegistry.run``), the fast-command router, or both — no mocks, no
+network, no live LLM, and no ``EVA_*`` execution flag is ever enabled here.
+Gated tools (like ``screen.observe``) are only ever asked to run; because the
+gate classifies them as confirm/override-class, they return a pending
+descriptor instead of executing, so these checks stay side-effect-free.
+"""
+
+from __future__ import annotations
+
+from .models import EvalContext, EvalTask
+
+
+def _allow_tool_executes(ctx: EvalContext) -> tuple[bool, str]:
+    result = ctx.registry.run("workspace_status")
+    if not isinstance(result, dict):
+        return False, f"expected a dict result from workspace_status, got {type(result).__name__}"
+    return True, "workspace_status (allow-class) executed and returned a dict"
+
+
+def _gated_tool_requires_confirmation(ctx: EvalContext) -> tuple[bool, str]:
+    result = ctx.registry.run("screen.observe", reason="eval")
+    if not isinstance(result, dict):
+        return False, f"expected a dict result from screen.observe, got {type(result).__name__}"
+    if result.get("requires_confirmation") is not True:
+        return False, f"screen.observe did not report requires_confirmation=True: {result}"
+    if not result.get("pending_id"):
+        return False, f"screen.observe did not report a pending_id: {result}"
+    return True, "screen.observe (override-class) was gated, not executed"
+
+
+def _self_approval_is_ignored(ctx: EvalContext) -> tuple[bool, str]:
+    result = ctx.registry.run("screen.observe", reason="eval", confirmed=True, _approved=True)
+    if not isinstance(result, dict):
+        return False, f"expected a dict result from screen.observe, got {type(result).__name__}"
+    if result.get("requires_confirmation") is not True:
+        return False, f"self-approval kwargs bypassed the gate: {result}"
+    return True, "confirmed/_approved kwargs were stripped by the gate; screen.observe stayed gated"
+
+
+def _unknown_tool_is_rejected(ctx: EvalContext) -> tuple[bool, str]:
+    try:
+        ctx.registry.run("definitely_not_a_tool")
+    except KeyError:
+        return True, "unknown tool name raised KeyError as expected"
+    except Exception as exc:
+        return False, f"unknown tool raised {type(exc).__name__} instead of KeyError: {exc}"
+    return False, "unknown tool name did not raise at all"
+
+
+def _fast_command_routes(ctx: EvalContext) -> tuple[bool, str]:
+    from ..core.fast_commands import maybe_handle_fast_command
+
+    outcome = maybe_handle_fast_command("traces status", ctx.registry)
+    if outcome is None:
+        return False, "`traces status` did not route to a fast command"
+    text, _kind = outcome
+    if not isinstance(text, str) or not text.strip():
+        return False, f"fast command returned a non-string or empty response: {outcome!r}"
+    return True, "`traces status` routed through the fast-command dispatcher"
+
+
+def offline_tasks() -> list[EvalTask]:
+    """The deterministic, offline eval suite run in CI on every commit."""
+    return [
+        EvalTask(
+            id="allow_tool_executes",
+            description="An allow-class tool call executes and returns a dict.",
+            category="execution",
+            check=_allow_tool_executes,
+        ),
+        EvalTask(
+            id="gated_tool_requires_confirmation",
+            description="An override-class tool call is gated instead of executed.",
+            category="safety",
+            check=_gated_tool_requires_confirmation,
+        ),
+        EvalTask(
+            id="self_approval_is_ignored",
+            description="Passing confirmed/_approved kwargs does not let a caller self-approve a gated call.",
+            category="safety",
+            check=_self_approval_is_ignored,
+        ),
+        EvalTask(
+            id="unknown_tool_is_rejected",
+            description="Calling an unregistered tool name raises KeyError.",
+            category="safety",
+            check=_unknown_tool_is_rejected,
+        ),
+        EvalTask(
+            id="fast_command_routes",
+            description="A known fast command routes through the dispatcher and returns text.",
+            category="routing",
+            check=_fast_command_routes,
+        ),
+    ]
