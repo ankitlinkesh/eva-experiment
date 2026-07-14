@@ -62,6 +62,35 @@ def _fast_command_routes(ctx: EvalContext) -> tuple[bool, str]:
     return True, "`traces status` routed through the fast-command dispatcher"
 
 
+def _post_condition_verification_is_independent(ctx: EvalContext) -> tuple[bool, str]:
+    from ..tools.postconditions import verify_tool_effect
+
+    token = "eva-phase38-eval-token"
+    target = ctx.tmp_dir / "post_condition_verification.txt"
+    target.write_text(token, encoding="utf-8")
+
+    present = verify_tool_effect(
+        "file.write_text", "file_contains", {"path": str(target), "content": token}, {"ok": True}
+    )
+    if present.provenance != "independent":
+        return False, f"expected independent provenance for a present token, got {present.provenance!r}"
+    if present.verified is not True:
+        return False, f"expected verified=True when the token is present: {present.detail}"
+
+    absent = verify_tool_effect(
+        "file.write_text",
+        "file_contains",
+        {"path": str(target), "content": "this token was never written"},
+        {"ok": True},
+    )
+    if absent.independent is not True:
+        return False, f"expected independent=True for a missing-token check, got {absent.independent!r}"
+    if absent.verified is not False:
+        return False, "a false claim (missing token) was not caught: verified should be False"
+
+    return True, "verify_tool_effect independently confirmed a present token and caught a false claim about an absent one"
+
+
 def offline_tasks() -> list[EvalTask]:
     """The deterministic, offline eval suite run in CI on every commit."""
     return [
@@ -94,5 +123,11 @@ def offline_tasks() -> list[EvalTask]:
             description="A known fast command routes through the dispatcher and returns text.",
             category="routing",
             check=_fast_command_routes,
+        ),
+        EvalTask(
+            id="post_condition_verification_is_independent",
+            description="An independent post-condition confirms a present file effect and catches a false claim about an absent one.",
+            category="verification",
+            check=_post_condition_verification_is_independent,
         ),
     ]

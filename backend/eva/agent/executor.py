@@ -15,6 +15,7 @@ class ToolExecutionResult:
     error: str | None = None
     requires_confirmation: bool = False
     action: str | None = None
+    verification: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         payload = {
@@ -26,6 +27,8 @@ class ToolExecutionResult:
         if self.requires_confirmation:
             payload["requires_confirmation"] = True
             payload["action"] = self.action
+        if self.verification is not None:
+            payload["verification"] = self.verification
         return payload
 
 
@@ -72,7 +75,25 @@ class ToolExecutor:
         if isinstance(result, dict) and result.get("hard_blocked"):
             return ToolExecutionResult(ok=False, tool=call.tool, result=result, error=result.get("message"))
 
-        return ToolExecutionResult(ok=True, tool=call.tool, result=result)
+        # Verification-first (Phase 38): the handler returned, but did the action
+        # actually take effect? Independently check its declared post-condition.
+        # Only an *independent* failure demotes ok to False (proof the effect did
+        # not happen); self-reported/observed/unverified never fabricate success.
+        verification: dict[str, Any] | None = None
+        ok = True
+        error: str | None = None
+        try:
+            from ..tools.postconditions import verify_tool_effect
+
+            outcome = verify_tool_effect(call.tool, spec.verification_method, args, result)
+            verification = outcome.as_dict()
+            if outcome.independent and not outcome.verified:
+                ok = False
+                error = f"post-condition not met: {outcome.detail}"
+        except Exception:
+            verification = None
+
+        return ToolExecutionResult(ok=ok, tool=call.tool, result=result, error=error, verification=verification)
 
     def _validate_args(self, schema: dict[str, Any], args: dict[str, Any]) -> str | None:
         properties = schema.get("properties", {}) or {}

@@ -46,12 +46,36 @@ def _compact_tool_result(result: ToolExecutionResult) -> dict[str, Any]:
     return payload
 
 
+def _provenance_suffix(verification: dict[str, Any] | None) -> str:
+    """Short suffix so Eva never narrates an unproven action as plain done.
+
+    Mirrors the provenance classes from ``postconditions.py``: only an
+    ``independent`` + verified effect earns an unqualified "(verified)"; every
+    weaker class says so plainly instead of upgrading into a false claim of
+    success. The independent-and-NOT-verified case never reaches here — the
+    executor already demotes ``ok`` to False for that, routing it to the
+    failure branch in :func:`_observation_text` instead.
+    """
+    if not verification:
+        return ""
+    provenance = verification.get("provenance")
+    if provenance == "independent" and verification.get("verified"):
+        return " (verified)"
+    if provenance == "self_reported":
+        return " (self-reported)"
+    if provenance == "observed":
+        return " (unverified — please confirm the visible result)"
+    if provenance == "unverified":
+        return " (unverified)"
+    return ""
+
+
 def _observation_text(call: PlannedToolCall, result: ToolExecutionResult) -> str:
     if result.requires_confirmation:
         return f"{call.tool} requires confirmation before {result.action or 'continuing'}."
     if not result.ok:
         return f"{call.tool} failed: {result.error or 'unknown error'}"
-    return describe_tool_observation(call.tool, result.result)
+    return describe_tool_observation(call.tool, result.result) + _provenance_suffix(result.verification)
 
 
 def _planned_tools(task: AgentTask) -> list[str]:

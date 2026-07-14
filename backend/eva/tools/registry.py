@@ -1472,9 +1472,22 @@ class ToolRegistry:
         # Flight recorder: record the actual invocation and a compact result
         # summary. Inert unless tracing is enabled with an active trace; wrapped
         # helper never raises, so it cannot affect the value returned to callers.
-        from ..observability.context import summarize_result, trace_tool_call
+        from ..observability.context import summarize_result, trace_tool_call, tracing_enabled, trace_verification
 
         trace_tool_call(spec.name, args, summarize_result(payload))
+        # Verification-first (Phase 38): independently check the action's declared
+        # post-condition against real state and record it. This is purely
+        # observational here (it never mutates `payload`), so it covers both
+        # allow-class runs and confirmed writes without touching gate control flow.
+        # Gated on tracing so the default (tracing-off) hot path does no extra I/O.
+        if tracing_enabled():
+            try:
+                from .postconditions import verify_tool_effect
+
+                verification = verify_tool_effect(spec.name, spec.verification_method, args, payload)
+                trace_verification(spec.name, verification.as_dict())
+            except Exception:
+                pass
         return payload
 
     def _create_gated_pending(self, name: str, spec: ToolSpec, decision: str, args: dict[str, Any]) -> dict[str, Any]:

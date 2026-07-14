@@ -139,6 +139,20 @@ def trace_tool_call(tool_name: str, args: dict[str, Any] | None, result_summary:
         return
 
 
+def trace_verification(tool_name: str, verification: dict[str, Any]) -> None:
+    """Record an independent post-condition verification for a tool effect."""
+    trace_id = _active_trace_id()
+    if not trace_id:
+        return
+    try:
+        from . import traces
+
+        payload = {"tool_name": tool_name, **(verification or {})}
+        traces.log_verification(trace_id, payload)
+    except Exception:
+        return
+
+
 def summarize_result(result: Any, limit: int = 240) -> str:
     """Best-effort compact string for a tool result, safe for any input.
 
