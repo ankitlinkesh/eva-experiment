@@ -37,6 +37,7 @@ _DAILY_DRIVER_FLAGS: dict[str, str] = {
     "EVA_TRACING_ENABLED": "1",
     "EVA_V2_VECTOR_MEMORY_ENABLED": "1",
     "EVA_NATIVE_FUNCTION_CALLING": "1",
+    "EVA_USER_MODEL_ENABLED": "1",
 }
 
 # Flags no profile may ever set automatically — Eva's hands and outward reach.
@@ -119,6 +120,7 @@ def current_activation_status(
             "tracing": _is_on(env, "EVA_TRACING_ENABLED"),
             "vector_memory": _is_on(env, "EVA_V2_VECTOR_MEMORY_ENABLED"),
             "native_function_calling": _is_on(env, "EVA_NATIVE_FUNCTION_CALLING"),
+            "user_model": _is_on(env, "EVA_USER_MODEL_ENABLED"),
         },
         "hands_external": {
             "real_input": _is_on(env, "EVA_ENABLE_REAL_INPUT"),

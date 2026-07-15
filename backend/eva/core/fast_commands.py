@@ -546,6 +546,48 @@ def _memory_facts_summary(memory: object | None) -> str:
     return "\n".join(lines)
 
 
+def _user_model_summary(memory: object | None) -> str:
+    """Report the durable, learned user model (Phase 43)."""
+    if memory is None or not hasattr(memory, "_user_model"):
+        return "Durable user model is unavailable in this route."
+    try:
+        model = memory._user_model()
+    except Exception:
+        model = None
+    if model is None:
+        return "Durable user model is off. Set EVA_USER_MODEL_ENABLED=1 (or EVA_PROFILE=daily) to let me learn compounding facts about you."
+    try:
+        data = model.summary()
+        beliefs = data.get("beliefs") or []
+    except Exception:
+        return "I could not read the durable user model."
+    if not beliefs:
+        return "I haven't learned any durable facts about you yet. Tell me things like where you live or what you're allergic to, and they'll compound over time."
+    lines = ["Here's what I've durably learned about you (most-confident first):"]
+    for belief in beliefs[:12]:
+        seen = belief.get("evidence_count", 1)
+        seen_txt = f", seen {seen}x" if isinstance(seen, int) and seen > 1 else ""
+        lines.append(f"- {belief.get('attribute')}: {belief.get('value')} (confidence {belief.get('confidence')}{seen_txt})")
+    return "\n".join(lines)
+
+
+def _consolidate_user_model(memory: object | None, session_id: str | None) -> str:
+    """Distil recent raw chat turns into the structured user model."""
+    if memory is None or not hasattr(memory, "_user_model"):
+        return "Durable user model is unavailable in this route."
+    try:
+        model = memory._user_model()
+    except Exception:
+        model = None
+    if model is None:
+        return "Durable user model is off. Set EVA_USER_MODEL_ENABLED=1 (or EVA_PROFILE=daily) first."
+    try:
+        result = model.consolidate(memory, session_id=session_id)
+    except Exception:
+        return "I could not consolidate memory just now."
+    return f"Consolidated memory: scanned {result.get('scanned', 0)} of your messages and learned/reinforced {result.get('learned', 0)} durable fact(s)."
+
+
 def _after_prefix(text: str, prefixes: tuple[str, ...]) -> str | None:
     for prefix in prefixes:
         if text.startswith(prefix):
@@ -4598,6 +4640,12 @@ def maybe_handle_fast_command(
 
     if _is_local_memory_question(normalized):
         return LOCAL_MEMORY_SUMMARY, "fast-command"
+
+    if normalized in {"user model", "what have you learned about me", "durable memory", "learned memory", "show user model"}:
+        return _user_model_summary(memory), "fast-command"
+
+    if normalized in {"consolidate memory", "consolidate user model", "learn from history"}:
+        return _consolidate_user_model(memory, session_id), "fast-command"
 
     if normalized in {"skills status", "skill status", "agent skills"}:
         from ..agent.skills import skill_status
