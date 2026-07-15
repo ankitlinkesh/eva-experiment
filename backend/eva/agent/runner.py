@@ -49,6 +49,27 @@ def _is_interrupted(signal: Any) -> bool:
         return False
 
 
+def _resolve_grounding(injected: Any) -> str:
+    """Phase 44: the live situational grounding string for this task, or "".
+
+    With no injection, auto-captures the situation only when perception is opted
+    in (default off). A caller may inject a ready string or a ``Situation``
+    (explicit intent, formatted regardless of the env gate) to drive the loop
+    deterministically. Fail-safe: any error grounds nothing."""
+    try:
+        from ..perception.situational_model import ground_observation, perception_enabled
+
+        if injected is not None:
+            if isinstance(injected, str):
+                return injected.strip()
+            return ground_observation(injected)
+        if not perception_enabled():
+            return ""
+        return ground_observation()
+    except Exception:
+        return ""
+
+
 def _is_privileged_tool(registry: ToolRegistry, tool_name: str) -> bool:
     """A tool is privileged if the permission gate would gate it (confirm /
     override / hard_block) rather than let it run immediately."""
@@ -238,10 +259,20 @@ async def run_agentic_task(user_message: str, context: dict[str, Any] | None = N
         # require_verified + max_revisions). The critic gates completion against
         # it. None = advisory critic (backward compatible single-shot behavior).
         contract = DelegationContract.of(context.get("contract"))
+        # Phase 44 perception & grounding: an opt-in, metadata-only situational
+        # snapshot (foreground app + open apps from window metadata — never
+        # pixels) captured once at dispatch so every planning step is grounded in
+        # live state. "" when perception is off or nothing is observable, so the
+        # planner prompt stays byte-identical. A caller may inject
+        # context["situation"] (a Situation or a ready string) to drive it
+        # deterministically.
+        grounding = _resolve_grounding(context.get("situation"))
         events: list[dict[str, Any]] = [
             {"type": "agent_task", "task_id": task.id, "message": "Agent task started"},
             {"type": "agent_plan", "task_id": task.id, "plan": list(task.plan), "message": "Plan ready"},
         ]
+        if grounding:
+            events.append({"type": "grounding", "task_id": task.id, "message": grounding})
         safety_stops: list[str] = []
 
         _safe_log(memory, session_id, "agent_task_started", {"task_id": task.id, "goal": goal, "plan": list(task.plan)})
@@ -281,6 +312,8 @@ async def run_agentic_task(user_message: str, context: dict[str, Any] | None = N
                     "screen_captures_used": state.screen_captures,
                 },
             }
+            if grounding:
+                task_context["situation"] = grounding
 
             try:
                 decision = await planner.plan(goal, history, mode="agent_step", task_context=task_context)

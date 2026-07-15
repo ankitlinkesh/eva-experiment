@@ -84,6 +84,7 @@ FULL_VERIFIERS = [
     "verify_eva_phase41_critic.py",
     "verify_eva_phase42_calibration.py",
     "verify_eva_phase43_memory.py",
+    "verify_eva_phase44_perception.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -143,6 +144,7 @@ QUICK_VERIFIERS = [
     "verify_eva_phase41_critic.py",
     "verify_eva_phase42_calibration.py",
     "verify_eva_phase43_memory.py",
+    "verify_eva_phase44_perception.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -166,6 +168,7 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_phase41_critic.py": ("phase41", "critic", "delegation-contract"),
     "verify_eva_phase42_calibration.py": ("phase42", "calibrated-autonomy", "trust-policy"),
     "verify_eva_phase43_memory.py": ("phase43", "memory", "user-model"),
+    "verify_eva_phase44_perception.py": ("phase44", "perception", "grounding"),
 }
 
 

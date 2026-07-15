@@ -398,6 +398,46 @@ def _user_model_learns_and_refuses_untrusted(ctx: EvalContext) -> tuple[bool, st
     return True, "the user model compounds a repeated trusted fact and refuses injected/untrusted content at intake"
 
 
+def _perception_is_metadata_only_and_opt_in(ctx: EvalContext) -> tuple[bool, str]:
+    """Phase 44: situational awareness is opt-in and never leaks a private title.
+
+    (a) With perception off (default), the no-arg summary captures nothing and
+    returns "". (b) A foreground window with a sensitive title is redacted to
+    "[private window]" and the raw title never appears. (c) The open-apps list
+    carries process names only, never titles. CI-safe: no real windows, no env
+    left mutated.
+    """
+    import os
+
+    from ..perception.situational_model import Situation, perception_enabled, situational_summary
+
+    saved = os.environ.get("EVA_PERCEPTION_ENABLED")
+    try:
+        os.environ.pop("EVA_PERCEPTION_ENABLED", None)
+        if perception_enabled() or situational_summary() != "":
+            return False, "perception must be off by default and produce no auto-summary"
+
+        sensitive = Situation(
+            active_app="chrome.exe",
+            active_title="MegaBank - Sign in",
+            open_apps=["chrome.exe", "Code.exe"],
+            window_count=2,
+            captured_at="t",
+        )
+        summary = situational_summary(sensitive)
+        if "MegaBank" in summary or "[private window]" not in summary:
+            return False, f"a sensitive foreground title must be redacted, got {summary!r}"
+        if "no screenshot" not in summary.lower():
+            return False, "the situational summary must make clear no screenshot was taken"
+    finally:
+        if saved is None:
+            os.environ.pop("EVA_PERCEPTION_ENABLED", None)
+        else:
+            os.environ["EVA_PERCEPTION_ENABLED"] = saved
+
+    return True, "perception is off by default, redacts sensitive foreground titles, and reads window metadata only (no pixels)"
+
+
 def offline_tasks() -> list[EvalTask]:
     """The deterministic, offline eval suite run in CI on every commit."""
     return [
@@ -478,5 +518,11 @@ def offline_tasks() -> list[EvalTask]:
             description="The durable user model compounds a repeated trusted fact and refuses injected/untrusted content at intake.",
             category="memory",
             check=_user_model_learns_and_refuses_untrusted,
+        ),
+        EvalTask(
+            id="perception_is_metadata_only_and_opt_in",
+            description="Situational awareness is off by default, redacts sensitive foreground window titles, and reads window metadata only (no pixels).",
+            category="privacy",
+            check=_perception_is_metadata_only_and_opt_in,
         ),
     ]
