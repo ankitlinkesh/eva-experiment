@@ -13,6 +13,7 @@ _DAILY_MIND_FLAGS = {
     "EVA_TRACING_ENABLED",
     "EVA_V2_VECTOR_MEMORY_ENABLED",
     "EVA_NATIVE_FUNCTION_CALLING",
+    "EVA_USER_MODEL_ENABLED",  # Phase 43: durable user model (side-effect-free mind capability).
 }
 
 
@@ -33,7 +34,7 @@ def main() -> int:
     from backend.eva.tools.registry import ToolRegistry
     from scripts import verify_eva_all
 
-    # Profiles exist and daily is exactly the three side-effect-free mind flags.
+    # Profiles exist and daily is exactly the side-effect-free mind flags.
     check("safe" in PROFILES and PROFILES["safe"] == {}, "safe profile must exist and be empty")
     check("daily" in PROFILES, "daily profile must exist")
     check(set(profile_flags("daily")) == _DAILY_MIND_FLAGS, "daily profile flags drifted from the mind set")

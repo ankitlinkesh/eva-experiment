@@ -106,6 +106,35 @@ class MemoryStore:
                 (uuid4().hex, session_id, role, content, datetime.now(timezone.utc).isoformat()),
             )
         self._maybe_vector_store(session_id, role, content)
+        self._maybe_learn_user_model(role, content)
+
+    def _user_model(self):
+        """Lazily construct the durable user model over this store's DB (Phase 43).
+
+        Returns ``None`` unless the feature is enabled, so every caller stays a
+        no-op by default. The instance is cached per store."""
+        try:
+            from .user_model import UserModel, user_model_enabled
+            if not user_model_enabled():
+                return None
+            model = getattr(self, "_user_model_cache", None)
+            if model is None:
+                model = UserModel(self.path)
+                self._user_model_cache = model
+            return model
+        except Exception:
+            return None
+
+    def _maybe_learn_user_model(self, role: str, content: str) -> None:
+        """Compound durable beliefs from the user's own trusted statements."""
+        if role != "user":
+            return
+        try:
+            model = self._user_model()
+            if model is not None:
+                model.observe(content, source_type="user", role="user")
+        except Exception:
+            return
 
     def _maybe_vector_store(self, session_id: str, role: str, content: str) -> None:
         try:
@@ -145,6 +174,7 @@ class MemoryStore:
 
     def history_with_recall(self, session_id: str, query: str, limit: int = 12) -> list[dict[str, str]]:
         history = self.recent_messages(session_id, limit=limit)
+        history = self._prepend_user_model(history, query)
         try:
             from ..vector_memory.retriever import search_memory, vector_memory_status
             if not vector_memory_status().get("enabled"):
@@ -161,6 +191,25 @@ class MemoryStore:
                 return history
             recall_msg = {"role": "system", "content": "Relevant things you remember about the user (from long-term memory):\n" + "\n".join(lines[:4])}
             return [recall_msg] + history
+        except Exception:
+            return history
+
+    def _prepend_user_model(self, history: list[dict[str, str]], query: str) -> list[dict[str, str]]:
+        """Prepend the durable, structured user model (Phase 43) as a system block.
+
+        The high-precision structured layer that complements the semantic recall
+        below it. The durable model is small and high-value, so the *whole* of it
+        (top confident beliefs) is injected every turn rather than filtered by the
+        query — that is what makes it compounding memory the model always sees.
+        No-op when the feature is off or nothing is known confidently. Fail-safe."""
+        try:
+            model = self._user_model()
+            if model is None:
+                return history
+            block = model.recall_block()
+            if not block:
+                return history
+            return [{"role": "system", "content": block}] + history
         except Exception:
             return history
 
