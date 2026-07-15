@@ -540,6 +540,11 @@ Rules:
             "steps": (task_context.get("steps") or [])[-6:],
             "limits": task_context.get("limits") or {},
         }
+        # Phase 44 grounding: a metadata-only live situational snapshot, present
+        # only when perception is opted in. Included conditionally so the prompt
+        # stays byte-identical when the feature is off.
+        if task_context.get("situation"):
+            compact_context["situation"] = task_context.get("situation")
         return f"""
 You are Eva's bounded agent-step planner. Return strict JSON only. No markdown. Do not reveal hidden chain-of-thought.
 

@@ -588,6 +588,26 @@ def _consolidate_user_model(memory: object | None, session_id: str | None) -> st
     return f"Consolidated memory: scanned {result.get('scanned', 0)} of your messages and learned/reinforced {result.get('learned', 0)} durable fact(s)."
 
 
+def _situation_report() -> str:
+    """Report the opt-in, metadata-only situational model (Phase 44). No pixels."""
+    try:
+        from ..perception.situational_model import capture_situation, perception_enabled, situational_summary
+    except Exception:
+        return "Situational awareness is unavailable in this build."
+    if not perception_enabled():
+        return (
+            "Situational awareness is off (opt-in). Set EVA_PERCEPTION_ENABLED=1 to let me ground on "
+            "which app you're using — from window metadata only, never a screenshot. Pixel reading stays the "
+            "gated 'observe screen' action."
+        )
+    snap = capture_situation()
+    if not snap.available:
+        return "I couldn't read any window metadata right now (nothing focused, or unsupported host)."
+    summary = situational_summary(snap)
+    note = " A privacy-sensitive window title was hidden." if snap.privacy_redacted else ""
+    return (summary or "No foreground app is observable right now.") + note + " (No screenshot was taken.)"
+
+
 def _after_prefix(text: str, prefixes: tuple[str, ...]) -> str | None:
     for prefix in prefixes:
         if text.startswith(prefix):
@@ -4646,6 +4666,9 @@ def maybe_handle_fast_command(
 
     if normalized in {"consolidate memory", "consolidate user model", "learn from history"}:
         return _consolidate_user_model(memory, session_id), "fast-command"
+
+    if normalized in {"situation", "perception status", "what am i working on", "what am i doing", "situational context"}:
+        return _situation_report(), "fast-command"
 
     if normalized in {"skills status", "skill status", "agent skills"}:
         from ..agent.skills import skill_status
