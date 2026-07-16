@@ -735,6 +735,15 @@ _SELF_IMPROVEMENT_DISABLED_MSG = (
 )
 
 
+def _llm_doctor_report() -> str:
+    """Report which LLM providers are actually configured (Phase 48). Offline."""
+    try:
+        from ..llm.doctor import configuration_report, format_configuration_report
+        return format_configuration_report(configuration_report())
+    except Exception:
+        return "I couldn't read my provider configuration just now."
+
+
 def _open_skill_store():
     try:
         from ..self_improvement import open_default_store
@@ -4899,6 +4908,9 @@ def maybe_handle_fast_command(
 
     if normalized in {"notifications", "my notifications", "what did i miss"}:
         return _proactivity_notifications(), "fast-command"
+
+    if normalized in {"llm doctor", "provider health", "llm health", "check providers", "provider diagnostics"}:
+        return _llm_doctor_report(), "fast-command"
 
     if normalized in {"learned skills", "my skills", "skill proposals", "list learned skills"}:
         return _learned_skills_list(), "fast-command"
