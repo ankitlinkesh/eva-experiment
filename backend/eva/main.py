@@ -46,6 +46,24 @@ def _apply_activation_profile() -> None:
         pass
 
 
+def _recover_durable_tasks_if_enabled(app: FastAPI) -> None:
+    """Resume durable work after a crash/reboot (Phase 45), only when
+    EVA_DURABLE_QUEUE_ENABLED is set. Recovery only re-queues interrupted
+    requests — each re-run still faces the permission gate, so nothing
+    privileged is replayed unattended. This never auto-drains the queue; a
+    worker is a separate, opt-in step. Wrapped so it can never crash startup."""
+    try:
+        from .tasks import open_default_queue
+
+        queue = open_default_queue()
+        if queue is None:
+            return
+        app.state.task_queue = queue
+        app.state.task_recovery = queue.recover_orphans()
+    except Exception:
+        pass
+
+
 def create_app() -> FastAPI:
     load_project_env(ROOT)
     _apply_activation_profile()
@@ -64,6 +82,7 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     app.state.memory = MemoryStore(ROOT / "data" / "eva.sqlite3")
+    _recover_durable_tasks_if_enabled(app)
     app.include_router(router, prefix="/api")
     app.include_router(get_control_center_routes())
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

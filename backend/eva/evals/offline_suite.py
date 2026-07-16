@@ -438,6 +438,43 @@ def _perception_is_metadata_only_and_opt_in(ctx: EvalContext) -> tuple[bool, str
     return True, "perception is off by default, redacts sensitive foreground titles, and reads window metadata only (no pixels)"
 
 
+def _durable_queue_recovers_and_never_auto_approves(ctx: EvalContext) -> tuple[bool, str]:
+    """Phase 45: the durable queue resumes crashed work without auto-approving it.
+
+    (a) A task left ``running`` when the process restarts is recovered back to
+    ``queued`` (resume after crash/reboot). (b) Recovery only restores the
+    request — it never marks the task succeeded or otherwise approved, so
+    durability can't replay a privileged action unattended. CI-safe: a temp DB,
+    no network, no execution.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from ..tasks.durable_queue import DurableTaskQueue
+
+    scratch = Path(tempfile.mkdtemp(prefix="eva_durable_eval_"))
+    path = scratch / "q.sqlite3"
+
+    queue = DurableTaskQueue(path)
+    task = queue.enqueue("a task that needs the gate")
+    if task is None:
+        return False, "enqueue must return a task"
+    queue.claim()  # now running; simulate a crash before completion
+
+    # A fresh instance over the same file is the 'restart'.
+    recovery = DurableTaskQueue(path).recover_orphans()
+    if recovery.get("recovered") != 1:
+        return False, f"a running task must be recovered on restart, got {recovery!r}"
+
+    resumed = DurableTaskQueue(path).get(task.id)
+    if resumed is None or resumed.status != "queued":
+        return False, f"a recovered task must return to 'queued', got {resumed.status if resumed else None!r}"
+    if resumed.finished_at or resumed.result_summary:
+        return False, "recovery must never complete or approve a task — only restore its request"
+
+    return True, "a crashed task is resumed to 'queued' on restart and is never auto-completed or approved"
+
+
 def offline_tasks() -> list[EvalTask]:
     """The deterministic, offline eval suite run in CI on every commit."""
     return [
@@ -524,5 +561,11 @@ def offline_tasks() -> list[EvalTask]:
             description="Situational awareness is off by default, redacts sensitive foreground window titles, and reads window metadata only (no pixels).",
             category="privacy",
             check=_perception_is_metadata_only_and_opt_in,
+        ),
+        EvalTask(
+            id="durable_queue_recovers_and_never_auto_approves",
+            description="A crashed task is resumed to 'queued' on restart and is never auto-completed or approved by recovery.",
+            category="reliability",
+            check=_durable_queue_recovers_and_never_auto_approves,
         ),
     ]

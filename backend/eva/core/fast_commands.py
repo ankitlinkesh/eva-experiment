@@ -608,6 +608,53 @@ def _situation_report() -> str:
     return (summary or "No foreground app is observable right now.") + note + " (No screenshot was taken.)"
 
 
+def _open_durable_queue():
+    try:
+        from ..tasks import open_default_queue
+        return open_default_queue()
+    except Exception:
+        return None
+
+
+_QUEUE_DISABLED_MSG = (
+    "The durable task queue is off. Set EVA_DURABLE_QUEUE_ENABLED=1 to let me remember tasks across "
+    "restarts. (Queued tasks still run through the permission gate — nothing privileged runs unattended.)"
+)
+
+
+def _durable_queue_status() -> str:
+    queue = _open_durable_queue()
+    if queue is None:
+        return _QUEUE_DISABLED_MSG
+    s = queue.stats()
+    return (
+        f"Durable task queue: {s.get('total', 0)} total | "
+        f"queued {s.get('queued', 0)}, running {s.get('running', 0)}, succeeded {s.get('succeeded', 0)}, "
+        f"failed {s.get('failed', 0)}, cancelled {s.get('cancelled', 0)}."
+    )
+
+
+def _durable_queue_recover() -> str:
+    queue = _open_durable_queue()
+    if queue is None:
+        return _QUEUE_DISABLED_MSG
+    r = queue.recover_orphans()
+    return (
+        f"Recovered {r.get('recovered', 0)} interrupted task(s) back into the queue and abandoned "
+        f"{r.get('abandoned', 0)} that had run out of attempts. Recovered tasks re-run through the gate."
+    )
+
+
+def _durable_queue_enqueue(text: str) -> str:
+    queue = _open_durable_queue()
+    if queue is None:
+        return _QUEUE_DISABLED_MSG
+    task = queue.enqueue(text, source="user")
+    if task is None:
+        return "I couldn't queue that — the task text was empty."
+    return f"Queued a durable task (id {task.id[:8]}): {task.request}. It survives restarts and runs through the gate."
+
+
 def _after_prefix(text: str, prefixes: tuple[str, ...]) -> str | None:
     for prefix in prefixes:
         if text.startswith(prefix):
@@ -4669,6 +4716,16 @@ def maybe_handle_fast_command(
 
     if normalized in {"situation", "perception status", "what am i working on", "what am i doing", "situational context"}:
         return _situation_report(), "fast-command"
+
+    if normalized in {"queue status", "task queue status", "durable queue status"}:
+        return _durable_queue_status(), "fast-command"
+
+    if normalized in {"queue recover", "recover tasks", "resume tasks"}:
+        return _durable_queue_recover(), "fast-command"
+
+    enqueue_text = _after_prefix(original, ("enqueue task ", "queue task ", "add task ", "enqueue "))
+    if enqueue_text:
+        return _durable_queue_enqueue(enqueue_text), "fast-command"
 
     if normalized in {"skills status", "skill status", "agent skills"}:
         from ..agent.skills import skill_status
