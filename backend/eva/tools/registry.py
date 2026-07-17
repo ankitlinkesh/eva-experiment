@@ -1467,11 +1467,31 @@ class ToolRegistry:
         from ..observability.context import trace_gate_decision
 
         trace_gate_decision(name, decision, spec)
+
+        # Phase 55 argument-aware risk escalation: the gate classifies per-TOOL,
+        # blind to WHERE the action points. Look at the actual arguments and raise
+        # friction when a target is sensitive (e.g. listing ~/.ssh, writing into a
+        # system directory). This can ONLY ever escalate — allow->confirm->override,
+        # never the reverse — so it is unconditional and fails safe. It runs before
+        # the Phase 42 de-escalation below and strictly dominates it: an action the
+        # risk layer raises is never then trust-auto-allowed.
+        from ..permissions.risk_signals import assess_friction
+
+        friction = assess_friction(
+            base_decision=decision,
+            action_type=str(getattr(spec, "action_type", "") or ""),
+            args=call_args,
+        )
+        if friction.escalated:
+            decision = friction.decision
+            trace_gate_decision(name, "risk_escalated", spec)
+
         # Phase 42 calibrated autonomy: a confirm-class action that the user has
         # approved enough times before may auto-allow — but ONLY when trust
         # policies are explicitly enabled, and NEVER for override/hard_block
         # (those cannot be de-escalated here). Guarded by the flag so the default
         # path is byte-identical: no ledger read, no behavior change, when off.
+        # A risk-escalated action is off "confirm" already, so it is never reached.
         if decision == "confirm":
             from ..permissions.trust_policy import calibrate, count_approvals, trust_policies_enabled
 

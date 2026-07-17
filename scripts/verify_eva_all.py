@@ -94,6 +94,7 @@ FULL_VERIFIERS = [
     "verify_eva_phase51_action_type_audit.py",
     "verify_eva_phase53_scheduler.py",
     "verify_eva_phase54_nl_rules.py",
+    "verify_eva_phase55_risk_signals.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -163,6 +164,7 @@ QUICK_VERIFIERS = [
     "verify_eva_phase51_action_type_audit.py",
     "verify_eva_phase53_scheduler.py",
     "verify_eva_phase54_nl_rules.py",
+    "verify_eva_phase55_risk_signals.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -196,6 +198,7 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_phase51_action_type_audit.py": ("phase51", "security", "action-type-audit"),
     "verify_eva_phase53_scheduler.py": ("phase53", "scheduler", "background-worker"),
     "verify_eva_phase54_nl_rules.py": ("phase54", "proactivity", "nl-rules"),
+    "verify_eva_phase55_risk_signals.py": ("phase55", "permissions", "risk-escalation"),
 }
 
 
