@@ -565,7 +565,7 @@ Rules:
 - Use lock_laptop for lock requests.
 - For shutdown, restart, sleep, sign out, or log out, do not call a tool unless the user explicitly confirms in this same message. If not confirmed, use type "confirmation_required" and final_response should ask for confirmation.
 - Use analyze_screen when the user asks Eva to understand, check, inspect, analyze, or identify an error on the screen. Use capture_screen only for a raw screenshot/capture request.
-- Use window_active/window_list for active or open window questions. Use window_focus/window_minimize/window_maximize for explicit window-management requests. Use desktop_observe for a bounded desktop state snapshot. Keep include_screen=false unless the user explicitly asks to inspect the screen.
+- Use window_active/window_list for active or open window questions. Use window_focus/window_minimize/window_maximize for explicit window-management requests. Use desktop_observe for a bounded desktop state snapshot; it returns window metadata only and never a screenshot. To look at the screen use analyze_screen or capture_screen, which require the user's confirmation.
 - Use code_search, code_find_symbol, code_project_map, code_explain_feature, code_debug_traceback, or code_plan_change for codebase/symbol/implementation/debugging/patch-plan questions. These tools are read-only and do not edit files.
 - Use workspace_search, workspace_read_file, workspace_list_files, workspace_summarize_file, or workspace_project_summary for generic safe file inspection. Workspace tools are read-only.
 - Use research_start_topic, research_recall, research_web, research_save_note, or research_summary for local research knowledge commands and long-term topic knowledge.

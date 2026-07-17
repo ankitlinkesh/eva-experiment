@@ -216,7 +216,8 @@ These commands provide local evidence only. They do not publish or certify produ
 - **No unrestricted shell or arbitrary command execution** (SHELL_ACTION is hard-blocked).
 - **No self-approval:** a `confirmed`/`_approved` argument from the model is stripped and carries no authority.
 - **No browser login, upload, download, cookie, profile, or session control.** With the browser enabled, N.O.V.A can open URLs and do bounded snapshot/click/type; clicks and typing are confirm-class, private hosts are blocked, and it does not automate logged-in actions.
-- **Desktop and screen input require explicit confirmation** and are not planner-reachable. There is no continuous monitoring; perception reads window metadata only and never captures pixels without the gated `screen.observe`.
+- **Every screen capture requires confirmation.** `capture_screen`, `analyze_screen` and `screen.observe` are all classified PRIVACY_SCREEN_READ (override-class): the planner may propose looking at your screen, but the gate holds it until you approve. No allow-class tool has a pixel path — `desktop_observe` returns window metadata only. There is no continuous monitoring.
+- **Desktop and screen input (click/type/hotkey) require explicit confirmation** and are not planner-reachable.
 - **No broad filesystem mutation:** writes/patches/moves/deletes are gated (require override), path-restricted to the project and Documents/Desktop/Downloads, and deny `.env*`, `.git`, `*.sqlite3`, and key files.
 - **No secret exfiltration:** the path allowlist blocks reading secret/config/database files by name, and the secrets broker scrubs live secret values out of anything sent to a model or a trace.
 - **No unattended privileged action:** proactive rules and durable-queue recovery replay a *request*, never an approval.
