@@ -22,6 +22,7 @@ from .models import (
     ProactiveNotification,
     ProactiveRule,
 )
+from .nl_rules import ParsedRule, parse_rule_request
 from .store import ProactivityStore
 from .triggers import should_fire
 
@@ -82,6 +83,8 @@ __all__ = [
     "open_default_store",
     "open_default_engine",
     "should_fire",
+    "parse_rule_request",
+    "ParsedRule",
     "INTERVAL",
     "DAILY",
     "FILE_CHANGE",

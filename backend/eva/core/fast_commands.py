@@ -728,6 +728,91 @@ def _proactivity_notifications() -> str:
     return "\n".join(lines)
 
 
+def _proactivity_create_rule(text: str) -> str | None:
+    """Create a standing rule from a typed sentence (Phase 54).
+
+    Returns ``None`` when the sentence has no recognisable schedule/trigger, so
+    the dispatcher falls through to the normal path instead of the rule creator
+    swallowing ordinary requests. A created rule only ever PROPOSES work — every
+    task it later queues still faces the permission gate.
+    """
+    try:
+        from ..proactivity import open_default_store, parse_rule_request, proactivity_enabled
+    except Exception:
+        return None
+    parsed = parse_rule_request(text)
+    if parsed is None:
+        return None  # not a schedule we understand -> let other handlers try
+    if not proactivity_enabled():
+        return _PROACTIVITY_DISABLED_MSG
+    # A rule's request text is persisted verbatim and later fed to the agent, so
+    # it must not smuggle a live secret into storage or a future prompt.
+    try:
+        from ..privacy.secrets_broker import contains_secret_leak
+
+        if contains_secret_leak(parsed.request):
+            return "I won't put that in a saved rule — the request text looks like it contains a secret."
+    except Exception:
+        pass
+    store = open_default_store()
+    if store is None:
+        return _PROACTIVITY_DISABLED_MSG
+    rule = store.add_rule(**parsed.as_add_rule_kwargs())
+    if rule is None:
+        return "I understood the schedule but couldn't save that rule. Try rephrasing the action."
+    return (
+        f"Rule created: {parsed.summary}\n"
+        f"It only proposes — when it fires it queues that request for approval and still runs through the gate. "
+        f"Say 'rules' to see it, or 'delete rule {rule.id[:8]}' to remove it."
+    )
+
+
+def _proactivity_delete_rule(fragment: str) -> str:
+    """Delete a rule by id or id-prefix (as shown by 'rules')."""
+    try:
+        from ..proactivity import open_default_store, proactivity_enabled
+    except Exception:
+        return "Proactivity is unavailable in this build."
+    if not proactivity_enabled():
+        return _PROACTIVITY_DISABLED_MSG
+    store = open_default_store()
+    if store is None:
+        return _PROACTIVITY_DISABLED_MSG
+    needle = fragment.strip().lower()
+    matches = [r for r in store.list_rules() if r.id == needle or r.id.lower().startswith(needle)]
+    if not matches:
+        return f"No rule matches '{fragment}'. Say 'rules' to list them."
+    if len(matches) > 1:
+        ids = ", ".join(r.id[:8] for r in matches)
+        return f"That prefix matches several rules ({ids}). Use more characters."
+    target = matches[0]
+    return f"Deleted rule: {target.name}" if store.delete_rule(target.id) else "Couldn't delete that rule."
+
+
+def _proactivity_set_enabled(fragment: str, enabled: bool) -> str:
+    """Pause ('disable') or resume ('enable') a rule by id-prefix."""
+    try:
+        from ..proactivity import open_default_store, proactivity_enabled
+    except Exception:
+        return "Proactivity is unavailable in this build."
+    if not proactivity_enabled():
+        return _PROACTIVITY_DISABLED_MSG
+    store = open_default_store()
+    if store is None:
+        return _PROACTIVITY_DISABLED_MSG
+    needle = fragment.strip().lower()
+    matches = [r for r in store.list_rules() if r.id == needle or r.id.lower().startswith(needle)]
+    if not matches:
+        return f"No rule matches '{fragment}'. Say 'rules' to list them."
+    if len(matches) > 1:
+        ids = ", ".join(r.id[:8] for r in matches)
+        return f"That prefix matches several rules ({ids}). Use more characters."
+    updated = store.set_enabled(matches[0].id, enabled)
+    if updated is None:
+        return "Couldn't update that rule."
+    return f"Rule {'enabled' if enabled else 'paused'}: {updated.name}"
+
+
 _SELF_IMPROVEMENT_DISABLED_MSG = (
     "Skill learning is off. Set EVA_SELF_IMPROVEMENT_ENABLED=1 to let me propose named skills from "
     "workflows that already worked. A skill only ever composes tools I already have — I never write code — "
@@ -4908,6 +4993,25 @@ def maybe_handle_fast_command(
 
     if normalized in {"notifications", "my notifications", "what did i miss"}:
         return _proactivity_notifications(), "fast-command"
+
+    delete_rule_frag = _after_prefix(normalized, ("delete rule ", "remove rule ", "forget rule "))
+    if delete_rule_frag:
+        return _proactivity_delete_rule(delete_rule_frag), "fast-command"
+
+    disable_rule_frag = _after_prefix(normalized, ("disable rule ", "pause rule ", "mute rule "))
+    if disable_rule_frag:
+        return _proactivity_set_enabled(disable_rule_frag, False), "fast-command"
+
+    enable_rule_frag = _after_prefix(normalized, ("enable rule ", "resume rule ", "unmute rule "))
+    if enable_rule_frag:
+        return _proactivity_set_enabled(enable_rule_frag, True), "fast-command"
+
+    # Natural-language rule creation (Phase 54). Returns None for anything that
+    # is not a recognisable schedule/trigger, so ordinary requests fall through
+    # to the normal agent path untouched.
+    created_rule = _proactivity_create_rule(original)
+    if created_rule is not None:
+        return created_rule, "fast-command"
 
     if normalized in {"llm doctor", "provider health", "llm health", "check providers", "provider diagnostics"}:
         return _llm_doctor_report(), "fast-command"
