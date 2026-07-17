@@ -1328,9 +1328,19 @@ class ToolRegistry:
 
     def _normalize_action_types(self) -> None:
         """Correct action_type metadata so it honestly reflects what each tool
-        does. Gate class is preserved: SAFE_LOCAL_UI is allow-class like the old
-        SAFE_LOCAL_READ, and POWER_ACTION tools stay override-class via their
-        dangerous safety_level."""
+        does. Gate class is preserved: SAFE_LOCAL_UI and NETWORK_ACTION are
+        allow-class like the old SAFE_LOCAL_READ, and POWER_ACTION tools stay
+        override-class via their dangerous safety_level.
+
+        Phase 51 extends this to network and local-write tools. SAFE_LOCAL_READ
+        is the *default*, so anything that forgot to declare an action_type
+        inherited it — which meant tools that hit the network or wrote local
+        state were describing themselves as safe local reads. Relabelling them
+        does not change what the gate does; it stops the metadata lying, and it
+        lets the Phase 51 audit tell a reviewed auto-allow from a forgotten one.
+        """
+        from ..security.action_audit import LOCAL_WRITE_TOOLS, NETWORK_TOOLS
+
         for name, spec in list(self._tools.items()):
             if spec.action_type != "SAFE_LOCAL_READ":
                 continue
@@ -1338,6 +1348,10 @@ class ToolRegistry:
                 self._tools[name] = replace(spec, action_type="SAFE_LOCAL_UI", risk_categories=("SAFE_LOCAL_UI",))
             elif name in _POWER_TOOLS:
                 self._tools[name] = replace(spec, action_type="POWER_ACTION", risk_categories=("POWER_ACTION",))
+            elif name in NETWORK_TOOLS:
+                self._tools[name] = replace(spec, action_type="NETWORK_ACTION", risk_categories=("NETWORK_ACTION",))
+            elif name in LOCAL_WRITE_TOOLS:
+                self._tools[name] = replace(spec, action_type="SAFE_LOCAL_UI", risk_categories=("SAFE_LOCAL_UI",))
 
     def list_tools(self) -> list[dict[str, Any]]:
         return [self._public_spec(spec) for spec in self._tools.values()]
