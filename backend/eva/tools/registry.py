@@ -1049,12 +1049,24 @@ class ToolRegistry:
                 safety_level="safe",
                 handler=_lock_laptop,
             ),
+            # Grabbing the screen is a PRIVACY_SCREEN_READ, exactly like
+            # screen.observe. These two used to default to SAFE_LOCAL_READ, which
+            # made them allow-class: they captured the whole screen to disk with
+            # no confirmation, AND they were planner-reachable while the properly
+            # gated screen.observe was not — the gate was inverted. Worse, the
+            # Phase 40 injection defense only escalates *privileged* tools, so an
+            # allow-class screen grab was invisible to it: injected web content
+            # could steer the planner into screenshotting the user. Classified
+            # honestly, they are now override-class and covered by that defense.
             "capture_screen": ToolSpec(
                 name="capture_screen",
                 description="Capture one on-demand screenshot only when the user explicitly asks Eva to look at, check, analyze, or inspect the screen.",
                 args_schema=_schema({}),
                 safety_level="sensitive",
                 handler=_capture_screen,
+                action_type="PRIVACY_SCREEN_READ",
+                risk_categories=("PRIVACY_SCREEN_READ",),
+                requires_confirmation=True,
             ),
             "analyze_screen": ToolSpec(
                 name="analyze_screen",
@@ -1062,23 +1074,30 @@ class ToolRegistry:
                 args_schema=_schema({"question": {"type": "string"}}, []),
                 safety_level="sensitive",
                 handler=_analyze_screen,
+                action_type="PRIVACY_SCREEN_READ",
+                risk_categories=("PRIVACY_SCREEN_READ",),
+                requires_confirmation=True,
             ),
+            # METADATA ONLY — this tool must never grab pixels. It used to accept
+            # include_screen + explicit_screen_intent and capture the screen when
+            # both were true. Because the gate classifies a call by TOOL, not by
+            # args, that pixel path rode through as allow-class ("safe") with no
+            # confirmation — and the unlocking flag, explicit_screen_intent, was
+            # supplied by the CALLER, i.e. the LLM authorized its own screen
+            # capture. That is the same self-approval bug the `confirmed` argument
+            # once had. The screen arguments are gone and capture is hard-wired
+            # off here: pixels are only reachable through the override-class
+            # capture_screen / analyze_screen / screen.observe, and window
+            # metadata has its own proper home in eva.perception.
             "desktop_observe": ToolSpec(
                 name="desktop_observe",
-                description="Observe active/open desktop windows. Screen capture is off by default and only allowed with explicit screen intent.",
-                args_schema=_schema(
-                    {
-                        "include_windows": {"type": "boolean"},
-                        "include_screen": {"type": "boolean"},
-                        "explicit_screen_intent": {"type": "boolean"},
-                    },
-                    [],
-                ),
+                description="Observe active/open desktop windows (window metadata only, never a screenshot). Use capture_screen or analyze_screen to look at the screen; those require confirmation.",
+                args_schema=_schema({"include_windows": {"type": "boolean"}}, []),
                 safety_level="safe",
-                handler=lambda include_windows=True, include_screen=False, explicit_screen_intent=False: desktop_observe(
+                handler=lambda include_windows=True: desktop_observe(
                     include_windows=bool(include_windows),
-                    include_screen=bool(include_screen),
-                    explicit_screen_intent=bool(explicit_screen_intent),
+                    include_screen=False,
+                    explicit_screen_intent=False,
                 ),
             ),
             "window_list": ToolSpec(
