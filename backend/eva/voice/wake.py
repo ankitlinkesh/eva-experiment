@@ -107,30 +107,79 @@ def wake_status(environ: dict[str, str] | None = None) -> dict[str, Any]:
         status["model_present"] = (directory / f"{name}_v0.1.onnx").exists()
     except Exception:
         status["model_present"] = False
+    # The wake model alone is not enough: without the shared preprocessors the
+    # engine raises on load and every frame silently scores "no wake". Reporting
+    # this (plus the last load error) is what makes a dead wake word diagnosable
+    # instead of looking exactly like a quiet room.
+    status["preprocessors_present"] = preprocessors_present(environ)
+    status["ready"] = bool(status["engine_installed"] and status["model_present"] and status["preprocessors_present"])
+    status["last_load_error"] = last_load_error()
     return status
 
 
 _MODEL_CACHE: dict[str, Any] = {}
 
+# Why the wake model last failed to load. A dead wake word is otherwise
+# indistinguishable from silence: every failure path here returns "no wake", so
+# without this the feature can be completely broken while wake_status() happily
+# reports engine_installed and model_present. Surfaced as "last_load_error".
+_LAST_LOAD_ERROR: str = ""
+
+# openWakeWord needs TWO kinds of model: the wake-word model itself, and the
+# shared preprocessor pair every wake word runs through. It looks for the
+# preprocessors inside its OWN package directory and ignores the custom model
+# dir, so keeping our models off the system drive silently broke it. We pass
+# them explicitly instead.
+PREPROCESSOR_MODELS = ("melspectrogram.onnx", "embedding_model.onnx")
+
+
+def preprocessors_present(environ: dict[str, str] | None = None) -> bool:
+    """Whether the shared melspectrogram/embedding models are in our model dir."""
+    try:
+        directory = wake_model_dir(environ)
+        return all((directory / name).exists() for name in PREPROCESSOR_MODELS)
+    except Exception:
+        return False
+
+
+def last_load_error() -> str:
+    """The most recent wake-model load failure, or "" if none."""
+    return _LAST_LOAD_ERROR
+
 
 def _load_model(environ: dict[str, str] | None = None):
     """Load (and cache) the wake model. Returns None when unavailable."""
+    global _LAST_LOAD_ERROR
+
     name = wake_word_name(environ)
     cached = _MODEL_CACHE.get(name)
     if cached is not None:
         return cached
     try:
         from openwakeword.model import Model  # lazy: never at module import
-    except Exception:
+    except Exception as exc:
+        _LAST_LOAD_ERROR = f"openwakeword not importable: {str(exc)[:160]}"
         return None
     try:
-        path = wake_model_dir(environ) / f"{name}_v0.1.onnx"
+        directory = wake_model_dir(environ)
+        path = directory / f"{name}_v0.1.onnx"
         if not path.exists():
+            _LAST_LOAD_ERROR = f"wake model not found: {path}"
             return None
-        model = Model(wakeword_models=[str(path)], inference_framework="onnx")
+        # Point openWakeWord at the preprocessors beside our wake models; without
+        # these it looks inside site-packages and fails with NO_SUCHFILE.
+        extra: dict[str, str] = {}
+        melspec = directory / "melspectrogram.onnx"
+        embedding = directory / "embedding_model.onnx"
+        if melspec.exists() and embedding.exists():
+            extra["melspec_model_path"] = str(melspec)
+            extra["embedding_model_path"] = str(embedding)
+        model = Model(wakeword_models=[str(path)], inference_framework="onnx", **extra)
         _MODEL_CACHE[name] = model
+        _LAST_LOAD_ERROR = ""
         return model
-    except Exception:
+    except Exception as exc:
+        _LAST_LOAD_ERROR = f"{type(exc).__name__}: {str(exc)[:200]}"
         return None
 
 

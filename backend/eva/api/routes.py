@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -37,6 +38,7 @@ from ..security.action_types import ActionType
 from ..security.permission_gate import PermissionContext, evaluate_action
 from ..tools.registry import ToolRegistry
 from ..vision import vision_status
+from ..voice.listener import listen_once, listen_status
 from ..voice.piper import piper_status, synthesize_piper_wav
 
 
@@ -60,6 +62,22 @@ class ChatResponse(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=4000)
+
+
+class VoiceListenRequest(BaseModel):
+    session_id: str | None = None
+
+
+class VoiceListenResponse(BaseModel):
+    session_id: str
+    woke: bool = False
+    wake_word: str = ""
+    transcript: str = ""
+    reply: str = ""
+    source: str = "voice"
+    reason: str = ""
+    requires_confirmation: bool = False
+    action: str | None = None
 
 
 def _json_line(payload: dict) -> str:
@@ -896,6 +914,68 @@ async def tts_piper(payload: TTSRequest) -> Response:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Piper TTS failed: {exc}") from exc
     return Response(content=audio, media_type="audio/wav")
+
+
+@router.get("/voice/listen/status")
+async def voice_listen_status() -> dict:
+    """Report the listening stack (wake model, STT, microphone, bounds).
+
+    Opens no device and loads no model — the UI uses this to decide whether to
+    offer a mic button. Everything is off unless EVA_VOICE_INPUT_ENABLED is set.
+    """
+    return listen_status()
+
+
+@router.post("/chat/voice", response_model=VoiceListenResponse)
+async def chat_voice(payload: VoiceListenRequest, request: Request) -> VoiceListenResponse:
+    """One hands-free turn: wait for the wake word, capture one utterance, and
+    route its transcript through the SAME chat pipeline as typed text.
+
+    This is the last mile of the voice loop (49c): ``voice/listener.listen_once``
+    has always produced a transcript, but nothing in the app invoked it. The
+    security property is kept STRUCTURALLY, not by promise — the heard text
+    re-enters through ``chat()``, so it faces the identical fast-command / operator
+    / capability / agentic stages and, above all, the same permission gate.
+    Speech earns no privilege over typing.
+
+    Voice input is off unless EVA_VOICE_INPUT_ENABLED is set; when off,
+    ``listen_once`` refuses without opening any device and this returns
+    ``reason="voice_input_disabled"`` with no chat turn. ``listen_once`` is bounded
+    (a wake timeout and a hard recording cap) but blocking, so it runs off the
+    event loop.
+    """
+    session_id = payload.session_id or uuid4().hex
+
+    result = await run_in_threadpool(listen_once)
+
+    # No transcript => no chat turn. Covers: voice disabled, wake timeout, an
+    # unavailable microphone, or nothing intelligible said. Surface the reason so
+    # the caller can tell "didn't hear you" from "voice is off".
+    if not result.text:
+        return VoiceListenResponse(
+            session_id=session_id,
+            woke=result.woke,
+            wake_word=result.wake_word,
+            transcript="",
+            reply="",
+            source="voice",
+            reason=result.reason,
+        )
+
+    # The heard text is handled EXACTLY like something typed — same pipeline, same
+    # gate. A spoken "delete my files" is no more authorized than a typed one.
+    chat_response = await chat(ChatRequest(message=result.text, session_id=session_id), request)
+    return VoiceListenResponse(
+        session_id=chat_response.session_id,
+        woke=True,
+        wake_word=result.wake_word,
+        transcript=result.text,
+        reply=chat_response.reply,
+        source=f"voice+{chat_response.source}",
+        reason=result.reason,
+        requires_confirmation=chat_response.requires_confirmation,
+        action=chat_response.action,
+    )
 
 
 @router.get("/tools")
