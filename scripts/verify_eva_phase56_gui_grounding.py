@@ -88,10 +88,29 @@ def main() -> int:
         check(ui_locator.locate_by_text_hint("Submit") is None, "ui_locator must stay a no-op when grounding is off")
 
         os.environ["EVA_GUI_GROUNDING_ENABLED"] = "1"
-        # Library-absent degradation: the REAL provider yields [] on this box.
-        grounding._default_provider = grounding._uiautomation_elements
-        check(grounding.enumerate_elements() == [], "no UIAutomation library must degrade to no targets, not an error")
-        check(locate("Submit") is None, "no targets must yield no location, never a guess")
+        # Library-absent degradation. The invariant is "UIAutomation lib absent ->
+        # [] targets, never an error" -- NOT "the lib happens to be uninstalled on
+        # this box". We prove it environment-independently by BLOCKING the
+        # uiautomation import so the real reader takes its fail-safe branch whether
+        # or not the lib is installed. (Installing uiautomation to give NOVA real
+        # eyes must never turn this red -- the earlier version asserted the ambient
+        # provider yielded [], which silently coupled the check to a bare machine.)
+        import builtins as _builtins
+
+        _real_import = _builtins.__import__
+
+        def _blocked_import(name, *a, **k):
+            if name == "uiautomation" or name.startswith("uiautomation."):
+                raise ModuleNotFoundError("No module named 'uiautomation'")
+            return _real_import(name, *a, **k)
+
+        _builtins.__import__ = _blocked_import
+        try:
+            grounding._default_provider = grounding._uiautomation_elements
+            check(grounding.enumerate_elements() == [], "the real reader must degrade to [] when the UIAutomation library is absent")
+            check(locate("Submit") is None, "no targets must yield no location, never a guess")
+        finally:
+            _builtins.__import__ = _real_import
 
         # 4. The bridge, wired end to end, on an injected tree.
         grounding._default_provider = lambda: list(form)

@@ -264,6 +264,16 @@ def enumerate_elements(provider: Callable[[], list[RawElement]] | None = None) -
     if not grounding_enabled():
         return []
     source = provider or _default_provider
+    # Read coordinates in the same DPI space the click path acts in, so a scaled
+    # display does not shift every target (see dpi.py). Only matters for the real
+    # UIAutomation reader; harmless (idempotent) for injected providers.
+    if source is _default_provider:
+        try:
+            from .dpi import ensure_dpi_aware
+
+            ensure_dpi_aware()
+        except Exception:
+            pass
     try:
         return list(source() or [])
     except Exception:

@@ -99,6 +99,7 @@ FULL_VERIFIERS = [
     "verify_eva_phase57_grounded_observation.py",
     "verify_eva_phase58_form_fill.py",
     "verify_eva_phase59_disambiguation.py",
+    "verify_eva_phase60_click_accuracy.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -173,6 +174,7 @@ QUICK_VERIFIERS = [
     "verify_eva_phase57_grounded_observation.py",
     "verify_eva_phase58_form_fill.py",
     "verify_eva_phase59_disambiguation.py",
+    "verify_eva_phase60_click_accuracy.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -211,6 +213,7 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_phase57_grounded_observation.py": ("phase57", "screen", "gui-grounding"),
     "verify_eva_phase58_form_fill.py": ("phase58", "screen", "form-fill"),
     "verify_eva_phase59_disambiguation.py": ("phase59", "screen", "gui-grounding"),
+    "verify_eva_phase60_click_accuracy.py": ("phase60", "screen", "gui-grounding"),
 }
 
 

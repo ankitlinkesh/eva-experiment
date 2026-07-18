@@ -32,6 +32,10 @@ def _pyautogui():
     if not real_input_enabled():
         return None, "real input disabled (set EVA_ENABLE_REAL_INPUT=1 to enable pyautogui-backed control)"
     try:
+        # Coordinates only line up if this process is DPI-aware (see dpi.py).
+        from .dpi import ensure_dpi_aware
+
+        ensure_dpi_aware()
         import pyautogui  # type: ignore
 
         # Slam the cursor into any screen corner to abort; small pause between actions.
@@ -118,15 +122,19 @@ def click_target(target: UiTarget, reason: str, action_id: str = "screen.click")
             raw={"target": target.as_dict()},
             error="ui_target_low_confidence",
         )
-    center_x = int(target.x + target.width / 2)
-    center_y = int(target.y + target.height / 2)
-    obs = click(center_x, center_y, reason, action_id=action_id)
+    # UiTarget.x,y is the CLICK POINT (grounding provides the element's center).
+    # Do NOT add width/2 here or the click lands half a control away — a bug that
+    # only surfaced under live validation, since every UiTarget producer emits a
+    # center point.
+    click_x = int(target.x)
+    click_y = int(target.y)
+    obs = click(click_x, click_y, reason, action_id=action_id)
     if obs.success:
         return _obs(
             action_id,
             True,
             f"Clicked verified UI target {target.label} for reason: {reason}.",
-            {"target": target.as_dict(), "x": center_x, "y": center_y},
+            {"target": target.as_dict(), "x": click_x, "y": click_y},
         )
     return obs
 
