@@ -14,11 +14,19 @@ user's behalf:
   2. IT NEVER CARRIES THE VALUES. A form value is often a password. No step, and
      no returned structure, contains the typed text; secret-looking values are
      flagged and still typed, but never stored.
-  3. IT GOES THROUGH THE GATE. Every field is a real screen.click + screen.type
-     via the executor seam (here the real ToolRegistry), so it inherits the
-     confidence, real-input and Phase 55 risk gates.
-  4. IT IS TRUSTED-CONSOLE ONLY. Not a planner tool — untrusted content cannot
+  3. IT IS TRUSTED-CONSOLE ONLY. Not a planner tool — untrusted content cannot
      make NOVA type attacker-chosen values into a form.
+
+This file checks (3) plus the stop-at-first-failure orchestration and the
+never-store-the-value discipline against an INJECTED executor, not the real
+ToolRegistry gate — ``fill_form``'s ``executor`` seam defaults to the real
+gate, but nothing here exercises that default path. That gap is exactly how
+two real defects (screen.type_text is confirm-class, so a real form call
+stalled at field 1 asking for approval; and tool args were written to the
+on-disk ledger in plaintext) shipped underneath a fully green suite built
+entirely on an injected executor. Phase 62 closes that gap: see
+``verify_eva_phase62_vault_form_submit.py`` for the same properties proven
+against the real ``ToolRegistry().run`` and the real confirmation round-trip.
 
 Fully offline: injected executor + injected UI tree, no network, no real input.
 """
@@ -105,8 +113,10 @@ def main() -> int:
     finally:
         form_filler._looks_like_secret = saved
 
-    # 5. The real gate is the default executor path, and the console entry is
-    #    trusted-only: form filling is NOT a planner tool.
+    # 5. This file only ever drives an INJECTED executor (never the real
+    #    ToolRegistry gate -- see verify_eva_phase62_vault_form_submit.py for
+    #    that). What it does pin against the real system: the console entry
+    #    is trusted-only, form filling is NOT a planner tool.
     names = {str(t.get("name", "")).lower() for t in ToolRegistry().list_tools()}
     for forbidden in ("form.fill", "fill_form", "screen.fill_form", "form_fill"):
         check(forbidden not in names, f"form filling must not be a planner tool, found {forbidden!r}")
@@ -123,11 +133,12 @@ def main() -> int:
 
     print(
         "PASS: Phase 58 form filling -- composes Phase 56/57 into 'fill in this form': for each field it clicks to "
-        "focus and types, through the ordinary gated tools (inheriting the confidence, real-input and risk gates). "
-        "It STOPS at the first field it cannot find (or a refused click/type) rather than typing values into the "
-        "wrong places, and it NEVER carries the values -- no step or outcome contains the typed text; secret-looking "
-        "values are flagged and still typed but never stored. Driven only from the trusted console, never as a "
-        "planner tool, so untrusted content cannot type attacker-chosen values into a form."
+        "focus and types, against an INJECTED executor (not the real ToolRegistry gate; see "
+        "verify_eva_phase62_vault_form_submit.py for that). It STOPS at the first field it cannot find (or a "
+        "refused click/type) rather than typing values into the wrong places, and it NEVER carries the values -- "
+        "no step or outcome contains the typed text; secret-looking values are flagged and still typed but never "
+        "stored. Driven only from the trusted console, never as a planner tool, so untrusted content cannot type "
+        "attacker-chosen values into a form."
     )
     return 0
 

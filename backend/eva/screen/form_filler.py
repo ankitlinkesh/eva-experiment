@@ -24,14 +24,44 @@ Three safety commitments:
 
 The executor is injectable, so the orchestration is tested without a real
 desktop; the default routes every step through the real ToolRegistry gate.
+
+Phase 62 adds a second path alongside ``fill_form``: staging. ``screen.type_text``
+is confirm-class, so gating each field individually (as ``fill_form`` does) stalls
+a real submission at field 1 asking to confirm typing. ``stage_form`` lets the
+trusted console record a whole form (fields -- literal or ``@vault:name``
+references -- plus what to do when done) as one ``StagedForm`` behind an opaque
+``spec_id``; the gated tool ``screen.submit_form`` (see ``screen_tools.py``) takes
+only that id and, after a single approval, performs the whole form. See
+``describe_staged_form`` for the value-free manifest the approval reads.
 """
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Sequence
 
 Executor = Callable[..., dict]
+
+# Phase 62: a field value of this form is a REFERENCE into the vault, not a
+# literal. It is safe to carry through staging, the gate's pending-call args,
+# and the ledger, because it resolves to plaintext only inside the approved
+# submit handler (see screen_tools.screen_submit_form) -- never here.
+VAULT_PREFIX = "@vault:"
+
+
+def is_vault_ref(value: str) -> bool:
+    return str(value or "").startswith(VAULT_PREFIX)
+
+
+def vault_ref_name(value: str) -> str | None:
+    """"@vault:email" -> "email". None if ``value`` is not a vault reference."""
+    text = str(value or "")
+    if not text.startswith(VAULT_PREFIX):
+        return None
+    name = text[len(VAULT_PREFIX) :].strip()
+    return name or None
 
 
 @dataclass(frozen=True)
@@ -64,6 +94,161 @@ class FillOutcome:
 
     def as_dict(self) -> dict[str, Any]:
         return {"steps": [s.as_dict() for s in self.steps], "filled": self.filled, "ok": self.ok, "stopped_reason": self.stopped_reason}
+
+
+# -- staging a form for one-shot, gated submission (Phase 62) ---------------
+#
+# `fill_form` above gates every keystroke individually, and `screen.type_text`
+# is confirm-class -- so a real call stalls at field 1 asking to confirm typing,
+# forever, one field at a time. The fix is to gate the whole submission ONCE:
+# the trusted console stages a form (fields, values or vault refs, and what to
+# do when done) and gets back an opaque `spec_id`. The gated tool
+# `screen.submit_form` takes ONLY that id; the gate gets to see the value-free
+# manifest (`describe_staged_form`) and approves the id, never a value. After
+# approval the handler pops the staged form (single-use) and does every
+# click/type/submit itself, calling the screen_tools functions directly rather
+# than re-entering the gate -- see the loud comment in screen_tools.py.
+#
+# This store mirrors `eva.security.tool_gate._PENDING_CALLS`: a module-level
+# dict, single-use pop, and a TTL so a stale id cannot be replayed long after
+# the console session that staged it is gone.
+
+
+@dataclass(frozen=True)
+class SubmitSpec:
+    """What to do once every field is filled."""
+
+    mode: str          # "click" | "press" | "none"
+    label: str = ""    # for "click", e.g. "Submit"
+    key: str = ""      # for "press", e.g. "enter"
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class StagedForm:
+    """A form staged from the trusted console, waiting for gate approval.
+
+    ``fields`` may hold literal values or ``@vault:name`` references -- either
+    way this object never holds a decrypted secret; a vault ref only resolves
+    to plaintext inside the post-approval submit handler.
+    """
+
+    spec_id: str
+    reason: str
+    fields: tuple[FormField, ...]
+    submit: SubmitSpec
+    window_title: str
+    created_at: datetime
+
+
+_STAGED_FORMS: dict[str, StagedForm] = {}
+_STAGE_TTL_SECONDS = 300
+
+
+def _staging_expired(staged: StagedForm) -> bool:
+    age = (datetime.now(timezone.utc) - staged.created_at).total_seconds()
+    return age > _STAGE_TTL_SECONDS
+
+
+def stage_form(
+    fields: Sequence[FormField | tuple[str, str]],
+    *,
+    reason: str,
+    submit: SubmitSpec,
+    window_title: str = "",
+) -> StagedForm:
+    """Stage a form for one-shot gated submission. Returns the staged record.
+
+    Called only from the trusted console (mirrors ``fill_form``'s trust
+    boundary): the caller decides the fields and the submit action, and gets
+    back a ``spec_id`` opaque enough that nothing downstream needs to see a
+    value again until an approved handler resolves it.
+    """
+    normalized = tuple(
+        f if isinstance(f, FormField) else FormField(str(f[0]), str(f[1])) for f in fields
+    )
+    spec_id = "fs_" + uuid.uuid4().hex[:12]
+    staged = StagedForm(
+        spec_id=spec_id,
+        reason=str(reason or ""),
+        fields=normalized,
+        submit=submit,
+        window_title=str(window_title or ""),
+        created_at=datetime.now(timezone.utc),
+    )
+    _STAGED_FORMS[spec_id] = staged
+    return staged
+
+
+def peek_staged_form(spec_id: str) -> StagedForm | None:
+    """Look up a staged form WITHOUT consuming it. None if unknown or expired."""
+    staged = _STAGED_FORMS.get(str(spec_id or ""))
+    if staged is None:
+        return None
+    if _staging_expired(staged):
+        # Expired: drop it here too, so a lookup after the TTL cannot linger.
+        _STAGED_FORMS.pop(str(spec_id or ""), None)
+        return None
+    return staged
+
+
+def pop_staged_form(spec_id: str) -> StagedForm | None:
+    """Consume a staged form -- single use. None if unknown or expired.
+
+    This is the injection defense for ``screen.submit_form``: the tool is
+    inert without an id this store actually issued, and once popped the same
+    id cannot be replayed.
+    """
+    staged = _STAGED_FORMS.pop(str(spec_id or ""), None)
+    if staged is None:
+        return None
+    if _staging_expired(staged):
+        return None
+    return staged
+
+
+def describe_staged_form(spec: StagedForm) -> str:
+    """The value-free manifest a human reads before approving the submission.
+
+    Shows vault NAMES (never vault values) and literal values IN FULL -- the
+    user typed the literals seconds ago in the same console session, so they
+    are not secret, and seeing them is what makes the approval informed.
+    """
+    header = (
+        f'Fill and submit a form in "{spec.window_title}":'
+        if spec.window_title
+        else "Fill and submit a form:"
+    )
+    lines = [header]
+    for index, item in enumerate(spec.fields, start=1):
+        if is_vault_ref(item.value):
+            name = vault_ref_name(item.value) or "?"
+            lines.append(f"  {index}. {item.label}  <- saved: {name}  (value hidden)")
+        else:
+            lines.append(f'  {index}. {item.label}  <- "{item.value}"')
+    if spec.submit.mode == "click" and spec.submit.label:
+        lines.append(f'  Then: click "{spec.submit.label}"')
+    elif spec.submit.mode == "press" and spec.submit.key:
+        lines.append(f'  Then: press "{spec.submit.key}"')
+    return "\n".join(lines)
+
+
+def foreground_window_title() -> str:
+    """Best-effort title of the current foreground window. Never raises.
+
+    Reuses the same window lookup ``screen.observe`` already relies on (see
+    ``screen_observer.get_active_window_title``); returns "" on any failure
+    (unsupported platform, no foreground window, import error, ...) so a
+    console staging a form never fails just because the title is unavailable.
+    """
+    try:
+        from .screen_observer import get_active_window_title
+
+        return str(get_active_window_title() or "")
+    except Exception:
+        return ""
 
 
 def _looks_like_secret(value: str) -> bool:
@@ -166,4 +351,20 @@ def parse_form_spec(text: str) -> list[FormField]:
     return fields
 
 
-__all__ = ["FormField", "FillStep", "FillOutcome", "fill_form", "parse_form_spec"]
+__all__ = [
+    "FormField",
+    "FillStep",
+    "FillOutcome",
+    "fill_form",
+    "parse_form_spec",
+    "VAULT_PREFIX",
+    "is_vault_ref",
+    "vault_ref_name",
+    "SubmitSpec",
+    "StagedForm",
+    "stage_form",
+    "peek_staged_form",
+    "pop_staged_form",
+    "describe_staged_form",
+    "foreground_window_title",
+]

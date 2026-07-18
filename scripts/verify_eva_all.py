@@ -101,6 +101,7 @@ FULL_VERIFIERS = [
     "verify_eva_phase59_disambiguation.py",
     "verify_eva_phase60_click_accuracy.py",
     "verify_eva_phase61_voice_loop.py",
+    "verify_eva_phase62_vault_form_submit.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -177,6 +178,7 @@ QUICK_VERIFIERS = [
     "verify_eva_phase59_disambiguation.py",
     "verify_eva_phase60_click_accuracy.py",
     "verify_eva_phase61_voice_loop.py",
+    "verify_eva_phase62_vault_form_submit.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -217,6 +219,7 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_phase59_disambiguation.py": ("phase59", "screen", "gui-grounding"),
     "verify_eva_phase60_click_accuracy.py": ("phase60", "screen", "gui-grounding"),
     "verify_eva_phase61_voice_loop.py": ("phase61", "voice", "voice-loop"),
+    "verify_eva_phase62_vault_form_submit.py": ("phase62", "vault", "form-submit"),
 }
 
 

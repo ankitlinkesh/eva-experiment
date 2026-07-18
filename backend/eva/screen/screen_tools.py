@@ -1,8 +1,20 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from . import screen_controller
+from .form_filler import (
+    FillOutcome,
+    FillStep,
+    StagedForm,
+    _error_of,
+    _looks_like_secret,
+    _ok,
+    is_vault_ref,
+    pop_staged_form,
+    vault_ref_name,
+)
 from .screen_observer import observe_screen_once
 from .ui_locator import UiTarget
 
@@ -108,3 +120,163 @@ def screen_scroll(amount: int, reason: str) -> dict[str, Any]:
 def screen_wait(seconds: float, reason: str) -> dict[str, Any]:
     obs = screen_controller.wait(seconds, reason)
     return {"ok": obs.success, **obs.as_dict()}
+
+
+# -- form submission (Phase 62) ----------------------------------------------
+#
+# See form_filler.py's module docstring for the full picture. Short version:
+# screen.type_text is confirm-class, so gating a form field-by-field (as
+# fill_form does) stalls forever at field 1. This tool takes only an opaque
+# spec_id for a form staged from the trusted console; ONE approval of
+# screen.submit_form authorizes the whole composite click/type/submit
+# sequence, which this handler then performs itself.
+
+
+def _open_vault():
+    """Best-effort vault handle, or ``None`` if disabled/unavailable. Never raises."""
+    try:
+        from ..vault import open_default_vault
+
+        return open_default_vault()
+    except Exception:
+        return None
+
+
+def _leak_guard(payload: dict[str, Any], used_values: list[str]) -> dict[str, Any]:
+    """Function-scoped self-check: does the outcome accidentally quote a value
+    this call actually used (a literal field value or a resolved vault secret)?
+
+    This is deliberately NOT a security boundary on its own -- the outcome is
+    built value-free by construction (FillStep/FillOutcome carry no value
+    field) -- it exists to catch a FUTURE edit that accidentally puts a value
+    into the return payload. Strictly local: no module global, no persistence,
+    ``used_values`` lives only in the caller's stack frame.
+    """
+    try:
+        serialized = json.dumps(payload, default=str)
+    except Exception:
+        serialized = str(payload)
+    for value in used_values:
+        if value and value in serialized:
+            return {"ok": False, "error": "value_leak_guard"}
+    return payload
+
+
+def screen_submit_form(spec_id: str, reason: str) -> dict[str, Any]:
+    """Perform an entire staged form (Phase 62): every click, keystroke, and
+    the final submit action, from a single approved ``spec_id``.
+
+    ``screen.submit_form`` carries no field values of its own -- only the
+    opaque id of a form staged from the trusted console (see
+    ``form_filler.stage_form``). That is the injection defense: the tool is
+    inert without an id this process actually issued, so untrusted content
+    cannot manufacture one. An unknown or expired id touches nothing.
+
+    Returns a value-free outcome dict (:class:`form_filler.FillOutcome` shape)
+    -- never a field value, and vault-backed fields are always marked secret.
+    """
+    staged: StagedForm | None = pop_staged_form(spec_id)
+    if staged is None:
+        return {
+            "ok": False,
+            "error": "unknown_or_expired_form_spec",
+            "message": "That form is no longer staged (unknown or expired spec_id); nothing was touched.",
+        }
+
+    effective_reason = str(reason or "").strip() or str(staged.reason or "").strip() or "form submission"
+
+    # Values actually used during this call. Kept STRICTLY local to this stack
+    # frame -- never stored, logged, or returned -- and only read by the leak
+    # guard right before each return, never by anything else in this function.
+    used_values: list[str] = []
+
+    steps: list[FillStep] = []
+    filled = 0
+
+    def _stop(outcome: FillOutcome) -> dict[str, Any]:
+        return _leak_guard(outcome.as_dict(), used_values)
+
+    for spec_field in staged.fields:
+        label = spec_field.label.strip()
+        is_ref = is_vault_ref(spec_field.value)
+        # Vault-backed fields are ALWAYS secret, regardless of what the
+        # heuristic in _looks_like_secret would say about the reference text
+        # itself (e.g. "@vault:email" does not look like a live secret).
+        secret = True if is_ref else _looks_like_secret(spec_field.value)
+        if not label:
+            steps.append(FillStep("", "not_found", secret, "empty field label"))
+            return _stop(FillOutcome(steps, filled, False, "a field had no label"))
+
+        # 1. Focus the field.
+        #
+        # *** THIS CALLS screen_click() DIRECTLY, AS A PLAIN PYTHON FUNCTION ***
+        # *** NOT registry.run("screen.click", ...). DO NOT "FIX" THIS.      ***
+        #
+        # screen.type_text is confirm-class. If this handler routed back
+        # through ToolRegistry.run(...), every keystroke would re-enter the
+        # gate and ask the user to confirm typing AGAIN -- reproducing the
+        # exact bug Phase 62 exists to fix (a real submission stalling
+        # forever at field 1). We are already PAST the gate: the user's one
+        # approval of screen.submit_form authorized this entire composite
+        # action. The gates below this level still run and still matter --
+        # real_input_enabled() inside screen_controller, the grounding
+        # confidence floor, and ambiguity refusal in grounding.resolve() are
+        # all still enforced inside screen_click/screen_type_text/screen_press
+        # themselves. Only the per-call REGISTRY gate is intentionally
+        # bypassed here, because it was already satisfied once for the form
+        # as a whole.
+        click = screen_click(label=label, reason=effective_reason)
+        if not _ok(click):
+            err = _error_of(click).lower()
+            if "ambiguous" in err:
+                steps.append(FillStep(label, "ambiguous", secret, _error_of(click).strip()[:200]))
+                return _stop(FillOutcome(steps, filled, False, f"'{label}' matched several fields; be more specific"))
+            if "ui_target_not_found" in err or "target_required" in err or "low_confidence" in err:
+                steps.append(FillStep(label, "not_found", secret, f"could not find field '{label}' on screen"))
+                return _stop(FillOutcome(steps, filled, False, f"could not find field '{label}'"))
+            steps.append(FillStep(label, "click_refused", secret, _error_of(click).strip()[:160]))
+            return _stop(FillOutcome(steps, filled, False, f"click on '{label}' was refused"))
+
+        # 2. Resolve the value as LATE as possible -- immediately before typing,
+        #    into a local that is never stored, returned, or logged. A vault
+        #    reference resolves to plaintext only right here; if it cannot be
+        #    resolved we stop rather than ever typing the literal "@vault:..."
+        #    text into the form (that would leak the reference into the page
+        #    and fill it with garbage).
+        if is_ref:
+            name = vault_ref_name(spec_field.value)
+            vault = _open_vault()
+            if vault is None:
+                steps.append(FillStep(label, "vault_unavailable", secret, "the vault is unavailable"))
+                return _stop(FillOutcome(steps, filled, False, f"the vault is unavailable, so '{label}' (saved: {name}) could not be filled"))
+            value = vault.resolve(name) if name else None
+            if value is None:
+                steps.append(FillStep(label, "vault_missing", secret, f"saved value '{name}' not found"))
+                return _stop(FillOutcome(steps, filled, False, f"no saved value named '{name}' for '{label}'"))
+        else:
+            value = spec_field.value
+
+        used_values.append(value)
+        typed = screen_type_text(text=value, reason=effective_reason)
+        value = None  # drop the local reference the instant it is no longer needed
+        if not _ok(typed):
+            steps.append(FillStep(label, "type_refused", secret, _error_of(typed).strip()[:160]))
+            return _stop(FillOutcome(steps, filled, False, f"typing into '{label}' was refused"))
+
+        steps.append(FillStep(label, "filled", secret))
+        filled += 1
+
+    # 3. The final submit action -- same direct-call rule as step 1 above.
+    if staged.submit.mode == "click" and staged.submit.label:
+        submitted = screen_click(label=staged.submit.label, reason=effective_reason)
+        if not _ok(submitted):
+            steps.append(FillStep(staged.submit.label, "submit_refused", False, _error_of(submitted).strip()[:160]))
+            return _stop(FillOutcome(steps, filled, False, f"submitting via '{staged.submit.label}' was refused"))
+    elif staged.submit.mode == "press" and staged.submit.key:
+        submitted = screen_press(key=staged.submit.key, reason=effective_reason)
+        if not _ok(submitted):
+            steps.append(FillStep(staged.submit.key, "submit_refused", False, _error_of(submitted).strip()[:160]))
+            return _stop(FillOutcome(steps, filled, False, f"submitting via key '{staged.submit.key}' was refused"))
+    # mode == "none": nothing further to do.
+
+    return _stop(FillOutcome(steps, filled, True, None))

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from ..screen.capture import capture_primary_screen_jpeg
-from ..screen.screen_tools import screen_click, screen_hotkey, screen_observe, screen_press, screen_scroll, screen_type_text, screen_wait
+from ..screen.screen_tools import screen_click, screen_hotkey, screen_observe, screen_press, screen_scroll, screen_submit_form, screen_type_text, screen_wait
 from ..vision import analyze_screen_image_sync
 from ..workspace import safe_list_files, safe_read_file, search_workspace, summarize_file, summarize_workspace, workspace_status
 from ..code import (
@@ -103,6 +103,12 @@ class ToolSpec:
     requires_confirmation: bool = False
     supports_rollback: bool = False
     verification_method: str = "command_result_success"
+    # Argument names whose VALUES must never be written to the pending-action
+    # ledger or any other durable record -- masked to "[HIDDEN]" in the
+    # payload summary / redacted_payload while the real values still reach
+    # execution (see _create_gated_pending). Empty by default: no behavior
+    # change for tools that don't declare any.
+    sensitive_args: tuple[str, ...] = ()
 
     @property
     def safe_by_default(self) -> bool:
@@ -340,6 +346,7 @@ class ToolRegistry:
                 risk_categories=("SAFE_LOCAL_UI",),
                 requires_confirmation=True,
                 verification_method="text_field_contains",
+                sensitive_args=("text",),
             ),
             "screen.hotkey": ToolSpec(
                 name="screen.hotkey",
@@ -353,6 +360,7 @@ class ToolRegistry:
                 risk_categories=("SAFE_LOCAL_UI",),
                 requires_confirmation=True,
                 verification_method="screen_state_changed",
+                sensitive_args=("keys",),
             ),
             "screen.press": ToolSpec(
                 name="screen.press",
@@ -390,6 +398,19 @@ class ToolRegistry:
                 action_type="SAFE_LOCAL_UI",
                 risk_categories=("SAFE_LOCAL_UI",),
                 verification_method="command_result_success",
+            ),
+            "screen.submit_form": ToolSpec(
+                name="screen.submit_form",
+                description="Fill and submit a form staged from the trusted console. Takes only a console-issued spec id; it carries no field values and is inert without one.",
+                args_schema=_schema({"spec_id": {"type": "string"}, "reason": {"type": "string"}}, ["spec_id", "reason"]),
+                safety_level="sensitive",
+                handler=lambda spec_id, reason: screen_submit_form(str(spec_id), str(reason)),
+                category="screen",
+                risk="medium",
+                action_type="SAFE_LOCAL_UI",
+                risk_categories=("SAFE_LOCAL_UI",),
+                requires_confirmation=True,
+                verification_method="screen_state_changed",
             ),
             "file.read_text": ToolSpec(
                 name="file.read_text",
@@ -1571,22 +1592,32 @@ class ToolRegistry:
         requires_override = decision == "override"
         risk_level = "high" if spec.safety_level == "dangerous" else "medium"
         target = str(args.get("path") or args.get("target") or args.get("dst") or args.get("recipient") or "")
+        # Mask declared sensitive arguments (e.g. screen.type_text's `text`)
+        # before anything durable is written. redact_secrets/sanitize_payload
+        # downstream only catch STRUCTURED secrets (API keys, emails) -- an
+        # arbitrary password typed into a form is plain text to them, so this
+        # per-tool allowlist is the only thing standing between it and disk.
+        safe_args = {k: ("[HIDDEN]" if k in spec.sensitive_args else v) for k, v in args.items()}
         action = EvaPendingAction.new(
             action_type=name,
             risk_level=risk_level,
             risk_category=spec.action_type,
             summary=f"{name}: {spec.description}",
             target=target or None,
-            payload_summary=", ".join(f"{key}={value}" for key, value in args.items()) or None,
+            payload_summary=", ".join(f"{key}={value}" for key, value in safe_args.items()) or None,
             requires_confirmation=not requires_override,
             requires_override=requires_override,
             source="tool_gate",
             executor_available=True,
             executor_name=name,
             safety_reason=f"{name} is classified as {decision}-class by the tool gate.",
-            redacted_payload=args,
+            redacted_payload=safe_args,
         )
         create_pending_action(action)
+        # IMPORTANT: register_pending_call must receive the REAL `args`, not
+        # `safe_args` -- run_approved() replays this exact dict to actually
+        # perform the action later. Only the ledger/durable record above is
+        # masked; execution must never see "[HIDDEN]" in place of a real value.
         tool_gate.register_pending_call(action.id, name, args)
         phrase = f"confirm override {action.id}" if requires_override else f"confirm {action.id}"
         return {

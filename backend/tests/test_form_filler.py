@@ -118,8 +118,22 @@ def test_secret_looking_values_are_flagged_but_still_typed(monkeypatch):
 # -- the console entry is trusted-only -------------------------------------
 
 def test_fill_form_is_not_a_planner_tool():
+    """The forbidden-name check alone was always a proxy for "the planner
+    can't call it" -- it never actually looked at what the planner can see.
+    Phase 62 gives this a stronger, honest form: assert directly against
+    ``planner_specs()`` (what the planner is actually handed) that the real
+    gated form-submission tool, ``screen.submit_form``, is absent, and that
+    neither of the two prefixes that DO auto-expose a tool to the planner
+    (``web.*``, ``mcp.*``) apply to it.
+    """
     from eva.tools.registry import ToolRegistry
 
-    names = {str(t.get("name", "")).lower() for t in ToolRegistry().list_tools()}
+    registry = ToolRegistry()
+    names = {str(t.get("name", "")).lower() for t in registry.list_tools()}
     for forbidden in ("form.fill", "fill_form", "screen.fill_form"):
         assert forbidden not in names
+
+    planner_names = {str(spec.get("name", "")) for spec in registry.planner_specs()}
+    assert "screen.submit_form" not in planner_names, "the gated form-submit tool must not be planner-reachable"
+    assert not "screen.submit_form".startswith("web."), "sanity: the web.* auto-expose prefix must not apply"
+    assert not "screen.submit_form".startswith("mcp."), "sanity: the mcp.* auto-expose prefix must not apply"

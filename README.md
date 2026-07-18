@@ -44,6 +44,7 @@ Real capabilities, and the flag each needs. **Default is off**: a fresh checkout
 | Proactive rules (schedules, file watchers) | opt-in | `EVA_PROACTIVITY_ENABLED` |
 | Learned skills (compose existing tools) | opt-in | `EVA_SELF_IMPROVEMENT_ENABLED` |
 | **GUI grounding** (click/fill by label via the accessibility tree) | opt-in, gated | `EVA_GUI_GROUNDING_ENABLED` |
+| **Credential vault** (saved logins/personal fields, DPAPI-encrypted; never reaches the model) | opt-in | `EVA_VAULT_ENABLED` |
 | **Real mouse/keyboard input** | opt-in, gated | `EVA_ENABLE_REAL_INPUT` |
 | **Real browser control** (Playwright) | opt-in, gated | `EVA_V2_PLAYWRIGHT_ENABLED` |
 | **MCP servers** (external tools) | opt-in, gated | `EVA_MCP_ENABLED` |
@@ -108,12 +109,26 @@ Typed-console entries that create or drive real work. These are **deliberately n
 remind me every morning to summarize my news     (creates a proactive rule)
 rules                    pause rule <id>         enable rule <id>
 delete rule <id>
-fill form: Email=you@example.com; Password=hunter2
+vault status             vault list             forget vault <name>
+save to vault work_login = <value>
+fill form preview: Email=@vault:email; Note=Following up
+fill form: Email=@vault:email; Note=Following up; submit=click:Sign in
 ```
 
-A created rule only ever **proposes**: when it fires, the work faces the gate exactly like anything else. Form filling never stores the values it types.
+A created rule only ever **proposes**: when it fires, the work faces the gate exactly like anything else.
 
-The *status* commands above return deterministic local text and neither publish nor unlock restricted features. The rule and form-fill entries in this last block are different: they create persistent state or drive real input, and they run under the same gate and flags as everything else (`fill form` additionally needs `EVA_GUI_GROUNDING_ENABLED` and `EVA_ENABLE_REAL_INPUT`).
+Form filling takes **one approval for the whole form** — you confirm filling every field *and* submitting, in a single step, rather than approving each keystroke. What you approve shows the binding, never the secret:
+
+```text
+Fill and submit a form in "Sign in - Example - Chrome":
+  1. Email  <- saved: email
+  2. Note   <- "Following up"
+  Then: click "Sign in"
+```
+
+A `@vault:name` reference is resolved from the encrypted vault **after** you approve, immediately before the value is typed. The value is never written to the approval record, the ledger, or a trace, and is never placed in the model's context. `vault list` shows names only; there is deliberately no command that prints a stored value.
+
+The *status* commands above return deterministic local text and neither publish nor unlock restricted features. The rule, vault and form-fill entries in this last block are different: they create persistent state or drive real input, and they run under the same gate and flags as everything else (`fill form` additionally needs `EVA_GUI_GROUNDING_ENABLED` and `EVA_ENABLE_REAL_INPUT`).
 
 ## Safe Local Demo
 
@@ -206,12 +221,15 @@ Delivered in dependency order after the July 2026 pivot. Each shipped with tests
 | 55 | **Argument-aware risk escalation** — the gate classifies per *tool* and is blind to *arguments*; this reads the actual arguments and raises friction for sensitive targets. Only ever escalates. |
 | 56 | **GUI grounding** — the eyes. A text label becomes a specific on-screen target with coordinates and a confidence; it declines rather than clicking the wrong thing. |
 | 57 | **Grounded observation** — `screen.observe` reports the clickable controls, not just the window title, closing the observe→act loop. |
-| 58 | **Form filling** — click-to-focus then type, per field, through the ordinary gated tools. Stops at the first field it cannot find, and never stores the typed values. |
+| 58 | **Form filling** — click-to-focus then type, per field. Stops at the first field it cannot find, and never stores the typed values. Its gated path was **dead on arrival** and stayed that way until Phase 62; see below. |
 | 59 | **Disambiguation** — two controls matching a label equally well produce a refusal with both candidates, not a coin flip. |
 | 60 | **Click accuracy** — two bugs found only by driving a *real* click: a double-centred coordinate that landed half a control away, and missing DPI awareness. |
 | 61 | **The voice loop, wired** — `listen_once()` had existed since 49b with nothing calling it. A transcript now routes through the same pipeline as typed text. Also fixed a wake word that could never fire. |
+| 62 | **Credential vault + single-approval form submission** — an OS-encrypted store for saved logins and personal fields, and one approval covering a whole form instead of each keystroke. Fixed two defects a fully green suite had missed: form filling could never fill a field, and typed values were persisted to disk in plaintext. |
 
-Phases 56–60 are validated on real hardware, not only in tests. Phase 61's wake and speech-to-text path is validated with synthesized speech driving the real models; firing on a human voice through a physical microphone is not covered.
+Phases 56–60 are validated on real hardware, not only in tests. Phase 61's wake and speech-to-text path is validated with synthesized speech driving the real models; firing on a human voice through a physical microphone is not covered. Phase 62's vault encryption and gate behaviour are covered by tests that drive the real permission gate; typing into real browser inputs and DPAPI failing under a genuinely different Windows account are not.
+
+Three times now, a phase has shipped green and been found dead when driven for real: memory that was assembled and discarded before the model saw it, a wake word that could never fire, and form filling that could never type. Each was hidden by a test double more permissive than the real system. The Phase 62 tests deliberately drive the real gate rather than a stand-in, and were checked by breaking the fix to confirm they fail.
 
 ## Run Locally
 
@@ -268,6 +286,8 @@ These commands provide local evidence only. They do not publish or certify produ
 - **No browser login, upload, download, cookie, profile, or session control.** With the browser enabled, N.O.V.A can open URLs and do bounded snapshot/click/type; clicks and typing are confirm-class, private hosts are blocked, and it does not automate logged-in actions.
 - **Every screen capture requires confirmation.** `capture_screen`, `analyze_screen` and `screen.observe` are all classified PRIVACY_SCREEN_READ (override-class): the planner may propose looking at your screen, but the gate holds it until you approve. No allow-class tool has a pixel path — `desktop_observe` returns window metadata only. There is no continuous monitoring.
 - **Desktop and screen input (click/type/hotkey) require explicit confirmation** and are not planner-reachable. Clicking by label (GUI grounding) changes how a target is *found*, never who may act: it still passes the confidence floor, the real-input flag, and the gate. When a label matches two controls about equally it **refuses and shows both** rather than guessing, and form filling stops at the first field it cannot resolve instead of typing the remaining values into the wrong places.
+- **Saved credentials never enter the model's context.** The vault is not a tool the planner can call, and its existence is not described to the model, so injected content cannot ask for a stored value — it cannot name what it cannot see. Form submission is driven by a reference (`@vault:name`) that is resolved only after your approval, immediately before typing; the value never appears in the approval record, the ledger, a trace, or a prompt. Encryption is Windows DPAPI, tied to your account: the vault file is useless if copied to another machine. It protects the file at rest, **not** against other programs already running as you.
+- **A form submission is approved as one action, not as keystrokes.** Approving shows which stored item goes into which field, in which window — the bindings an attacker would have to change — while hiding the values themselves.
 - **Sensitive arguments raise friction, they do not lower it.** The gate classifies per *tool*, which leaves it blind to a dangerous *argument*; a separate check reads the actual arguments and escalates for sensitive targets (reading one asks, mutating one requires override). It can only ever escalate — never de-escalate, and never past a hard block.
 - **No broad filesystem mutation:** writes/patches/moves/deletes are gated (require override), path-restricted to the project and Documents/Desktop/Downloads, and deny `.env*`, `.git`, `*.sqlite3`, and key files.
 - **No secret exfiltration:** the path allowlist blocks reading secret/config/database files by name, and the secrets broker scrubs live secret values out of anything sent to a model or a trace.
@@ -286,6 +306,7 @@ These commands provide local evidence only. They do not publish or certify produ
 - Learned-skill proposals are mined from traces and require your approval.
 - The voice loop is validated with synthesized speech driving the real wake and transcription models. Wake-word reliability on a *human* voice through a physical microphone, across accents and room noise, is not characterized.
 - GUI grounding reads the Windows accessibility tree, so it is blind to apps that do not expose one (many Electron, canvas, and game UIs). It declines rather than guessing, so those apps degrade to "cannot find that control" instead of misclicking. A vision fallback is not built.
+- The vault defends against injected *content* driving it, **not** against a hostile *window*. Grounding matches labels, not origin: if you have a convincing phishing page open and fill it, `@vault:email` goes to the phisher — with your approval, because you did intend to fill that form. The window title is shown in the approval text so you confirm *where*, not just *what*. Binding a saved value to a specific site would need browser-origin plumbing the accessibility layer does not have.
 - Verification evidence is checkout-specific and must be refreshed before any release review.
 - The permission gate is the security model. It has not been externally audited.
 

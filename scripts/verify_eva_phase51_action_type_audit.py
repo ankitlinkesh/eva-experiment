@@ -49,7 +49,9 @@ def check(value: object, message: str) -> None:
 
 # The gate classes as they stand. Pinned so a future change that loosens the
 # gate has to say so out loud rather than drift.
-EXPECTED_CLASS_COUNTS = {"allow": 84, "override": 12, "confirm": 7}
+# Phase 62: confirm 7 -> 8 for the new "screen.submit_form" tool (fill+submit a
+# form staged from the trusted console; confirm-class, SAFE_LOCAL_UI).
+EXPECTED_CLASS_COUNTS = {"allow": 84, "override": 12, "confirm": 8}
 
 SCREEN_CAPTURE_TOOLS = ("capture_screen", "analyze_screen", "screen.observe")
 

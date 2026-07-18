@@ -728,36 +728,265 @@ def _proactivity_notifications() -> str:
     return "\n".join(lines)
 
 
-def _fill_form_command(payload: str, tools: ToolRegistry) -> str:
-    """Fill a form from a typed 'fill form: Label=value; ...' spec (Phase 58).
+def _parse_form_submit_clause(payload: str):
+    """Pull an optional trailing 'submit=...' clause out of a fill-form payload.
 
-    Console-only by design (never a planner tool), so untrusted content cannot
-    drive it. Every click/keystroke goes through the ordinary gate; values are
-    never echoed, logged, or traced by this handler."""
+    Must run BEFORE parse_form_spec, or e.g. 'submit=click:Sign in' would be
+    parsed as an ordinary field (it has a label and an '='). Recognises
+    'submit=click:<label>', 'submit=press:<key>', and 'submit=none'; anything
+    absent or unrecognised defaults to clicking a button labelled 'Submit'.
+
+    Returns (remaining_payload, SubmitSpec)."""
+    from ..screen.form_filler import SubmitSpec
+
+    clauses = str(payload or "").split(";")
+    remaining: list[str] = []
+    submit = SubmitSpec("click", label="Submit")
+    consumed = False
+    for clause in clauses:
+        stripped = clause.strip()
+        if not consumed and stripped.lower().startswith("submit="):
+            consumed = True
+            value = stripped[len("submit="):].strip()
+            lowered = value.lower()
+            if lowered == "none":
+                submit = SubmitSpec("none")
+            elif lowered.startswith("click:"):
+                label = value[len("click:"):].strip()
+                submit = SubmitSpec("click", label=label or "Submit")
+            elif lowered.startswith("press:"):
+                key = value[len("press:"):].strip()
+                submit = SubmitSpec("press", key=key or "enter")
+            # else: unrecognised submit value -- keep the default (click Submit).
+            continue
+        remaining.append(clause)
+    return ";".join(remaining), submit
+
+
+def _form_manifest_reason(fields, submit, window_title: str) -> str:
+    """A value-free one-line manifest of field->source bindings, never a value.
+
+    This string is both the reason handed to screen.submit_form and (via the
+    gate's payload_summary) what lands in the ledger -- so the audit record is
+    useful with zero new plumbing, and a vault value can never appear in it
+    because it names the vault entry, not its resolved contents."""
+    from ..screen.form_filler import is_vault_ref, vault_ref_name
+
+    parts = []
+    for f in fields:
+        if is_vault_ref(f.value):
+            parts.append(f"{f.label}<-saved:{vault_ref_name(f.value) or '?'}")
+        else:
+            parts.append(f"{f.label}<-literal")
+    where = f" in '{window_title}'" if window_title else ""
+    return f"fill and submit {len(fields)} field(s) [{', '.join(parts)}]{where}"
+
+
+def _fill_form_preview_command(payload: str) -> str:
+    """'fill form preview: ...' (Phase 62) -- show the field->source bindings
+    without staging or arming anything, so the user can check the parse
+    before committing to a real (gated) submission."""
     try:
-        from ..screen.form_filler import fill_form, parse_form_spec
+        from ..screen.form_filler import StagedForm, describe_staged_form, foreground_window_title, parse_form_spec
+    except Exception:
+        return "Form filling is unavailable in this build."
+
+    field_payload, submit = _parse_form_submit_clause(payload)
+    fields = parse_form_spec(field_payload)
+    if not fields:
+        return "Usage: fill form preview: Email=me@example.com; Password=@vault:work_login; submit=click:Sign in"
+
+    from datetime import datetime, timezone
+
+    preview = StagedForm(
+        spec_id="preview",
+        reason="preview",
+        fields=tuple(fields),
+        submit=submit,
+        window_title=foreground_window_title(),
+        created_at=datetime.now(timezone.utc),
+    )
+    return describe_staged_form(preview) + "\n\n(Preview only -- nothing staged or executed. Use `fill form: ...` to run it.)"
+
+
+def _fill_form_command(payload: str, tools: ToolRegistry) -> str:
+    """Fill and submit a form from a typed 'fill form: Label=value; ...' spec.
+
+    Phase 62 rewrite: gating every keystroke individually (the Phase 58 way)
+    stalls forever at field 1, because screen.type_text is confirm-class. This
+    instead stages the whole form from this trusted console -- literal values
+    or '@vault:name' references -- and asks for ONE approval of the gated
+    screen.submit_form tool, which performs every click/keystroke/submit
+    itself after that single approval (see form_filler.py's module docstring
+    and screen_tools.screen_submit_form). Values, including any resolved
+    vault secret, never leave this process as plaintext; only the value-free
+    manifest is shown or logged.
+
+    Console-only by design (never a planner tool), so untrusted content
+    cannot drive it -- and the vault stays unreachable from the model."""
+    try:
+        from ..screen.form_filler import (
+            describe_staged_form,
+            foreground_window_title,
+            is_vault_ref,
+            parse_form_spec,
+            stage_form,
+            vault_ref_name,
+        )
         from ..screen.grounding import grounding_enabled
     except Exception:
         return "Form filling is unavailable in this build."
-    fields = parse_form_spec(payload)
+
+    field_payload, submit = _parse_form_submit_clause(payload)
+    fields = parse_form_spec(field_payload)
     if not fields:
-        return "Usage: fill form: Email=me@example.com; Password=secret; Full Name=John Doe"
+        return "Usage: fill form: Email=me@example.com; Password=@vault:work_login; submit=click:Sign in"
     if not grounding_enabled():
         return (
             "GUI grounding is off, so I can't find form fields yet. Set EVA_GUI_GROUNDING_ENABLED=1 "
             "(and EVA_ENABLE_REAL_INPUT=1, plus `pip install uiautomation`) to let me fill forms."
         )
-    executor = lambda tool, **kwargs: tools.run(tool, **kwargs)  # noqa: E731 - thin gate passthrough
-    outcome = fill_form(fields, reason="user asked me to fill a form", executor=executor)
-    lines = [f"Filled {outcome.filled}/{len(fields)} field(s):"]
-    for step in outcome.steps:
-        mark = {"filled": "OK"}.get(step.status, "--")
-        secret = " (value looked sensitive; not logged)" if step.secret else ""
-        detail = f" — {step.detail}" if step.detail and step.status != "filled" else ""
-        lines.append(f"- [{mark}] {step.label or '(no label)'}: {step.status}{secret}{detail}")
-    if not outcome.ok and outcome.stopped_reason:
-        lines.append(f"Stopped: {outcome.stopped_reason}. Nothing further was typed.")
+
+    # Validate every @vault: reference UP FRONT. Failing before staging is much
+    # better UX than failing halfway through typing a real form.
+    vault_names = sorted({vault_ref_name(f.value) for f in fields if is_vault_ref(f.value) and vault_ref_name(f.value)})
+    if vault_names:
+        try:
+            from ..vault import open_default_vault, vault_enabled
+        except Exception:
+            return "This form references saved vault values, but the vault is unavailable in this build. Nothing was staged."
+        if not vault_enabled():
+            return (
+                "This form references saved vault values (@vault:...), but the vault is off. "
+                "Set EVA_VAULT_ENABLED=1, or type the values literally instead. Nothing was staged."
+            )
+        vault = open_default_vault()
+        if vault is None:
+            return "This form references saved vault values, but the vault couldn't be opened. Nothing was staged."
+        missing = [name for name in vault_names if not vault.has(name)]
+        if missing:
+            named = ", ".join(f"'{m}'" for m in missing)
+            return f"Nothing was staged -- no saved value named {named}. Say `vault list` to see what's saved."
+
+    window_title = foreground_window_title()
+    reason = _form_manifest_reason(fields, submit, window_title)
+    spec = stage_form(fields, reason=reason, submit=submit, window_title=window_title)
+    manifest = describe_staged_form(spec)
+
+    result = tools.run("screen.submit_form", spec_id=spec.spec_id, reason=reason)
+    message = result.get("message") if isinstance(result, dict) else None
+    if not message:
+        # Only reachable if trust policies (Phase 42, off by default) auto-
+        # approved the call and it already ran. Report the real outcome.
+        ok = isinstance(result, dict) and result.get("ok")
+        message = "It already ran (auto-approved by trust policy)." if ok else "It did not run."
+    return f"{manifest}\n\n{message}"
+
+
+# -- vault console commands (Phase 62) ---------------------------------------
+#
+# Typed-console only, like the form-filling commands above: NEVER a registry
+# tool, NEVER a planner tool. The whole point of the vault is that the model
+# cannot reach it -- only a value-free '@vault:name' reference can, and only
+# through the gated screen.submit_form path. These handlers never print a
+# value: `vault status`/`vault list` show metadata only (mirroring
+# VaultEntry's deliberate lack of a value field), and `save to vault` echoes
+# back only the name it stored.
+
+_VAULT_DISABLED_MSG = (
+    "The vault is off. Set EVA_VAULT_ENABLED=1 to let me remember saved values "
+    "(DPAPI-encrypted, tied to this Windows account) for form filling with @vault: references."
+)
+
+
+def _vault_status_command() -> str:
+    try:
+        from ..vault import open_default_vault, vault_enabled
+    except Exception:
+        return "The vault is unavailable in this build."
+    if not vault_enabled():
+        return _VAULT_DISABLED_MSG
+    vault = open_default_vault()
+    if vault is None:
+        return _VAULT_DISABLED_MSG
+    health = vault.health()
+    if not health.get("ok"):
+        return "Vault status check failed."
+    lines = [
+        f"Vault: {health.get('summary', '')}",
+        f"Path: {health.get('path', '')}",
+        f"DPAPI available: {health.get('dpapi_available')}",
+        f"Written by this account: {health.get('written_by_this_account')}",
+    ]
+    undecryptable = health.get("undecryptable_names") or []
+    if undecryptable:
+        lines.append("Cannot decrypt: " + ", ".join(undecryptable))
     return "\n".join(lines)
+
+
+def _vault_list_command() -> str:
+    try:
+        from ..vault import open_default_vault, vault_enabled
+    except Exception:
+        return "The vault is unavailable in this build."
+    if not vault_enabled():
+        return _VAULT_DISABLED_MSG
+    vault = open_default_vault()
+    if vault is None:
+        return _VAULT_DISABLED_MSG
+    entries = vault.list_entries()
+    if not entries:
+        return "Nothing saved in the vault yet. Say `save to vault <name> = <value>` to add one."
+    lines = [f"Saved values ({len(entries)}):"]
+    for entry in entries:
+        lines.append(f"- {entry.name} ({entry.kind}) — {entry.label}")
+    return "\n".join(lines)
+
+
+_VAULT_KIND_HINTS = ("password", "pw", "login", "secret", "token")
+
+
+def _vault_save_command(payload: str) -> str:
+    """'save to vault <name> = <value>'. Echoes back only the NAME, never the
+    value -- on any failure (e.g. DPAPI unavailable) says plainly that nothing
+    was stored, rather than silently succeeding or leaking the value."""
+    try:
+        from ..vault import open_default_vault, vault_enabled
+    except Exception:
+        return "The vault is unavailable in this build."
+    if not vault_enabled():
+        return _VAULT_DISABLED_MSG
+    if "=" not in payload:
+        return "Usage: save to vault <name> = <value>"
+    name, value = payload.split("=", 1)
+    name = name.strip()
+    value = value.strip()
+    if not name or not value:
+        return "Usage: save to vault <name> = <value>"
+    lowered = name.lower()
+    kind = "login" if any(hint in lowered for hint in _VAULT_KIND_HINTS) else "identity"
+    vault = open_default_vault()
+    if vault is None:
+        return _VAULT_DISABLED_MSG
+    if not vault.put(name, value, kind=kind):
+        return f"Nothing was stored -- I couldn't encrypt '{name}' (DPAPI unavailable)."
+    return f"Saved '{name}' to the vault."
+
+
+def _vault_forget_command(name: str) -> str:
+    try:
+        from ..vault import open_default_vault, vault_enabled
+    except Exception:
+        return "The vault is unavailable in this build."
+    if not vault_enabled():
+        return _VAULT_DISABLED_MSG
+    name = name.strip()
+    if not name:
+        return "Usage: forget vault <name>"
+    vault = open_default_vault()
+    if vault is None:
+        return _VAULT_DISABLED_MSG
+    return f"Deleted '{name}' from the vault." if vault.delete(name) else f"No saved value named '{name}'."
 
 
 def _proactivity_create_rule(text: str) -> str | None:
@@ -5038,12 +5267,38 @@ def maybe_handle_fast_command(
     if enable_rule_frag:
         return _proactivity_set_enabled(enable_rule_frag, True), "fast-command"
 
-    # Form filling (Phase 58): typed-console only, never a planner tool. Match the
-    # prefix case-insensitively but slice the ORIGINAL so labels/values keep case
+    # Form preview (Phase 62): stages nothing, just shows the field->source
+    # manifest. MUST be checked BEFORE the "fill form:"/"fill form " prefixes
+    # below -- "fill form preview: ..." also starts with "fill form ", so it
+    # would otherwise be shadowed and its payload misparsed as real fields.
+    for _preview_prefix in ("fill form preview:", "fill form preview "):
+        if original.lower().startswith(_preview_prefix):
+            return _fill_form_preview_command(original[len(_preview_prefix):].strip(" :")), "fast-command"
+
+    # Form filling (Phase 58; staged one-shot submission in Phase 62):
+    # typed-console only, never a planner tool. Match the prefix
+    # case-insensitively but slice the ORIGINAL so labels/values keep case
     # (lowercasing does not change length, so the indices line up).
     for _fill_prefix in ("fill form:", "fill form ", "fill the form:", "fill the form "):
         if original.lower().startswith(_fill_prefix):
             return _fill_form_command(original[len(_fill_prefix):].strip(" :"), tools), "fast-command"
+
+    # Vault (Phase 62): typed-console only, never a registry/planner tool --
+    # the vault must stay unreachable from the model. Value case is preserved
+    # by slicing the ORIGINAL string, same trick as the form commands above.
+    if normalized in {"vault status", "vault health"}:
+        return _vault_status_command(), "fast-command"
+
+    if normalized in {"vault list", "list vault", "vault entries", "list saved values"}:
+        return _vault_list_command(), "fast-command"
+
+    for _save_prefix in ("save to vault ", "vault save "):
+        if original.lower().startswith(_save_prefix):
+            return _vault_save_command(original[len(_save_prefix):].strip()), "fast-command"
+
+    for _forget_prefix in ("forget vault ", "vault forget ", "vault delete "):
+        if original.lower().startswith(_forget_prefix):
+            return _vault_forget_command(original[len(_forget_prefix):].strip()), "fast-command"
 
     # Natural-language rule creation (Phase 54). Returns None for anything that
     # is not a recognisable schedule/trigger, so ordinary requests fall through

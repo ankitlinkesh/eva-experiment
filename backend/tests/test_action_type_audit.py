@@ -89,4 +89,6 @@ def test_relabelling_is_gate_preserving(registry):
     for spec in registry._tools.values():
         cls = tool_gate.classify_tool_call(spec)
         counts[cls] = counts.get(cls, 0) + 1
-    assert counts == {"allow": 84, "override": 12, "confirm": 7}, f"gate class counts drifted: {counts}"
+    # Phase 62: confirm 7 -> 8 for "screen.submit_form" (fill+submit a form
+    # staged from the trusted console; confirm-class, SAFE_LOCAL_UI).
+    assert counts == {"allow": 84, "override": 12, "confirm": 8}, f"gate class counts drifted: {counts}"
