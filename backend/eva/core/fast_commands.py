@@ -728,6 +728,38 @@ def _proactivity_notifications() -> str:
     return "\n".join(lines)
 
 
+def _fill_form_command(payload: str, tools: ToolRegistry) -> str:
+    """Fill a form from a typed 'fill form: Label=value; ...' spec (Phase 58).
+
+    Console-only by design (never a planner tool), so untrusted content cannot
+    drive it. Every click/keystroke goes through the ordinary gate; values are
+    never echoed, logged, or traced by this handler."""
+    try:
+        from ..screen.form_filler import fill_form, parse_form_spec
+        from ..screen.grounding import grounding_enabled
+    except Exception:
+        return "Form filling is unavailable in this build."
+    fields = parse_form_spec(payload)
+    if not fields:
+        return "Usage: fill form: Email=me@example.com; Password=secret; Full Name=John Doe"
+    if not grounding_enabled():
+        return (
+            "GUI grounding is off, so I can't find form fields yet. Set EVA_GUI_GROUNDING_ENABLED=1 "
+            "(and EVA_ENABLE_REAL_INPUT=1, plus `pip install uiautomation`) to let me fill forms."
+        )
+    executor = lambda tool, **kwargs: tools.run(tool, **kwargs)  # noqa: E731 - thin gate passthrough
+    outcome = fill_form(fields, reason="user asked me to fill a form", executor=executor)
+    lines = [f"Filled {outcome.filled}/{len(fields)} field(s):"]
+    for step in outcome.steps:
+        mark = {"filled": "OK"}.get(step.status, "--")
+        secret = " (value looked sensitive; not logged)" if step.secret else ""
+        detail = f" — {step.detail}" if step.detail and step.status != "filled" else ""
+        lines.append(f"- [{mark}] {step.label or '(no label)'}: {step.status}{secret}{detail}")
+    if not outcome.ok and outcome.stopped_reason:
+        lines.append(f"Stopped: {outcome.stopped_reason}. Nothing further was typed.")
+    return "\n".join(lines)
+
+
 def _proactivity_create_rule(text: str) -> str | None:
     """Create a standing rule from a typed sentence (Phase 54).
 
@@ -5005,6 +5037,13 @@ def maybe_handle_fast_command(
     enable_rule_frag = _after_prefix(normalized, ("enable rule ", "resume rule ", "unmute rule "))
     if enable_rule_frag:
         return _proactivity_set_enabled(enable_rule_frag, True), "fast-command"
+
+    # Form filling (Phase 58): typed-console only, never a planner tool. Match the
+    # prefix case-insensitively but slice the ORIGINAL so labels/values keep case
+    # (lowercasing does not change length, so the indices line up).
+    for _fill_prefix in ("fill form:", "fill form ", "fill the form:", "fill the form "):
+        if original.lower().startswith(_fill_prefix):
+            return _fill_form_command(original[len(_fill_prefix):].strip(" :"), tools), "fast-command"
 
     # Natural-language rule creation (Phase 54). Returns None for anything that
     # is not a recognisable schedule/trigger, so ordinary requests fall through
