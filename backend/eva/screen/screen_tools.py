@@ -15,6 +15,8 @@ from .form_filler import (
     is_vault_ref,
     pop_staged_form,
     vault_ref_name,
+    verify_declared_domain,
+    verify_staged_origin,
 )
 from .screen_observer import observe_screen_once
 from .ui_locator import UiTarget
@@ -226,6 +228,17 @@ def screen_submit_form(spec_id: str, reason: str) -> dict[str, Any]:
             steps.append(FillStep(label, "window_changed", secret, window_error[:200]))
             return _stop(FillOutcome(steps, filled, False, f"aborted before '{label}': {window_error}"))
 
+        # 0b. Phase 67: re-verify the browser ORIGIN, not just the window.
+        # This is the identity half of the phishing gap the window guard
+        # above cannot see -- a page can be titled and styled to look exactly
+        # like the real site while living at a different domain. Only binds
+        # when the staged window WAS a browser (see verify_staged_origin's
+        # module comment for the full rule); a native app form is untouched.
+        origin_error = verify_staged_origin(staged)
+        if origin_error:
+            steps.append(FillStep(label, "origin_changed", secret, origin_error[:200]))
+            return _stop(FillOutcome(steps, filled, False, f"aborted before '{label}': {origin_error}"))
+
         if not label:
             steps.append(FillStep("", "not_found", secret, "empty field label"))
             return _stop(FillOutcome(steps, filled, False, "a field had no label"))
@@ -272,6 +285,19 @@ def screen_submit_form(spec_id: str, reason: str) -> dict[str, Any]:
             if vault is None:
                 steps.append(FillStep(label, "vault_unavailable", secret, "the vault is unavailable"))
                 return _stop(FillOutcome(steps, filled, False, f"the vault is unavailable, so '{label}' (saved: {name}) could not be filled"))
+
+            # Phase 67 rule (b): a vault entry that DECLARES a required domain
+            # binds regardless of whether the window looked like a browser at
+            # staging time -- and fails CLOSED if the current origin cannot be
+            # read at all. Checked before resolve(), so an unreadable/mismatched
+            # origin never even decrypts the value, let alone types it.
+            required_domain = vault.entry_domain(name) if name else ""
+            if required_domain:
+                domain_error = verify_declared_domain(required_domain)
+                if domain_error:
+                    steps.append(FillStep(label, "origin_mismatch", secret, domain_error[:200]))
+                    return _stop(FillOutcome(steps, filled, False, f"aborted before '{label}': {domain_error}"))
+
             value = vault.resolve(name) if name else None
             if value is None:
                 steps.append(FillStep(label, "vault_missing", secret, f"saved value '{name}' not found"))
@@ -298,6 +324,11 @@ def screen_submit_form(spec_id: str, reason: str) -> dict[str, Any]:
         if window_error:
             steps.append(FillStep(staged.submit.label or staged.submit.key, "window_changed", False, window_error[:200]))
             return _stop(FillOutcome(steps, filled, False, f"aborted before submitting: {window_error}"))
+
+        origin_error = verify_staged_origin(staged)
+        if origin_error:
+            steps.append(FillStep(staged.submit.label or staged.submit.key, "origin_changed", False, origin_error[:200]))
+            return _stop(FillOutcome(steps, filled, False, f"aborted before submitting: {origin_error}"))
 
     if staged.submit.mode == "click" and staged.submit.label:
         submitted = screen_click(label=staged.submit.label, reason=effective_reason)

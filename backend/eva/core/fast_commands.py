@@ -787,7 +787,13 @@ def _fill_form_preview_command(payload: str) -> str:
     without staging or arming anything, so the user can check the parse
     before committing to a real (gated) submission."""
     try:
-        from ..screen.form_filler import StagedForm, describe_staged_form, foreground_window_title, parse_form_spec
+        from ..screen.form_filler import (
+            StagedForm,
+            describe_staged_form,
+            foreground_origin,
+            foreground_window_title,
+            parse_form_spec,
+        )
     except Exception:
         return "Form filling is unavailable in this build."
 
@@ -798,6 +804,7 @@ def _fill_form_preview_command(payload: str) -> str:
 
     from datetime import datetime, timezone
 
+    is_browser, origin_domain = foreground_origin()
     preview = StagedForm(
         spec_id="preview",
         reason="preview",
@@ -805,6 +812,8 @@ def _fill_form_preview_command(payload: str) -> str:
         submit=submit,
         window_title=foreground_window_title(),
         created_at=datetime.now(timezone.utc),
+        origin_domain=origin_domain,
+        is_browser=is_browser,
     )
     return describe_staged_form(preview) + "\n\n(Preview only -- nothing staged or executed. Use `fill form: ...` to run it.)"
 
@@ -827,6 +836,7 @@ def _fill_form_command(payload: str, tools: ToolRegistry) -> str:
     try:
         from ..screen.form_filler import (
             describe_staged_form,
+            foreground_origin,
             foreground_window_title,
             is_vault_ref,
             parse_form_spec,
@@ -869,8 +879,16 @@ def _fill_form_command(payload: str, tools: ToolRegistry) -> str:
             return f"Nothing was staged -- no saved value named {named}. Say `vault list` to see what's saved."
 
     window_title = foreground_window_title()
+    is_browser, origin_domain = foreground_origin()
     reason = _form_manifest_reason(fields, submit, window_title)
-    spec = stage_form(fields, reason=reason, submit=submit, window_title=window_title)
+    spec = stage_form(
+        fields,
+        reason=reason,
+        submit=submit,
+        window_title=window_title,
+        origin_domain=origin_domain,
+        is_browser=is_browser,
+    )
     manifest = describe_staged_form(spec)
 
     result = tools.run("screen.submit_form", spec_id=spec.spec_id, reason=reason)
@@ -939,7 +957,8 @@ def _vault_list_command() -> str:
         return "Nothing saved in the vault yet. Say `save to vault <name> = <value>` to add one."
     lines = [f"Saved values ({len(entries)}):"]
     for entry in entries:
-        lines.append(f"- {entry.name} ({entry.kind}) — {entry.label}")
+        binding = f" [bound to domain: {entry.domain}]" if entry.domain else ""
+        lines.append(f"- {entry.name} ({entry.kind}) — {entry.label}{binding}")
     return "\n".join(lines)
 
 
@@ -987,6 +1006,58 @@ def _vault_forget_command(name: str) -> str:
     if vault is None:
         return _VAULT_DISABLED_MSG
     return f"Deleted '{name}' from the vault." if vault.delete(name) else f"No saved value named '{name}'."
+
+
+def _vault_bind_command(payload: str) -> str:
+    """'bind vault <name> to domain <domain>' (Phase 67) -- declare that
+    ``@vault:<name>`` only fills on pages whose browser-reported origin
+    matches ``<domain>``. Metadata-only: never touches the encrypted value,
+    and a SEPARATE command from `save to vault` on purpose, so a domain
+    string can never collide with (or be mistaken for) part of a saved
+    value's own text.
+    """
+    try:
+        from ..vault import open_default_vault, vault_enabled
+    except Exception:
+        return "The vault is unavailable in this build."
+    if not vault_enabled():
+        return _VAULT_DISABLED_MSG
+    if " to domain " not in payload.lower():
+        return "Usage: bind vault <name> to domain <domain>  (e.g. bind vault work_login to domain mybank.com)"
+    idx = payload.lower().index(" to domain ")
+    name = payload[:idx].strip()
+    domain = payload[idx + len(" to domain "):].strip()
+    if not name or not domain:
+        return "Usage: bind vault <name> to domain <domain>  (e.g. bind vault work_login to domain mybank.com)"
+    vault = open_default_vault()
+    if vault is None:
+        return _VAULT_DISABLED_MSG
+    if not vault.has(name):
+        return f"No saved value named '{name}'. Say `vault list` to see what's saved."
+    if not vault.set_domain(name, domain):
+        return f"Could not bind '{name}' to a domain."
+    return f"'{name}' will now only fill on pages whose address bar shows '{domain}'."
+
+
+def _vault_unbind_command(name: str) -> str:
+    """'unbind vault <name>' (Phase 67) -- clear a previously declared domain
+    binding, returning the entry to its default (fills on any page)."""
+    try:
+        from ..vault import open_default_vault, vault_enabled
+    except Exception:
+        return "The vault is unavailable in this build."
+    if not vault_enabled():
+        return _VAULT_DISABLED_MSG
+    name = name.strip()
+    if not name:
+        return "Usage: unbind vault <name>"
+    vault = open_default_vault()
+    if vault is None:
+        return _VAULT_DISABLED_MSG
+    if not vault.has(name):
+        return f"No saved value named '{name}'."
+    vault.set_domain(name, "")
+    return f"'{name}' is no longer bound to a domain."
 
 
 def _proactivity_create_rule(text: str) -> str | None:
@@ -5304,6 +5375,17 @@ def maybe_handle_fast_command(
     for _forget_prefix in ("forget vault ", "vault forget ", "vault delete "):
         if original.lower().startswith(_forget_prefix):
             return _vault_forget_command(original[len(_forget_prefix):].strip()), "fast-command"
+
+    # Vault domain binding (Phase 67): a SEPARATE command from `save to
+    # vault`, on purpose -- metadata-only, so a domain string can never
+    # collide with a saved value's own text.
+    for _bind_prefix in ("bind vault ", "vault bind "):
+        if original.lower().startswith(_bind_prefix):
+            return _vault_bind_command(original[len(_bind_prefix):].strip()), "fast-command"
+
+    for _unbind_prefix in ("unbind vault ", "vault unbind "):
+        if original.lower().startswith(_unbind_prefix):
+            return _vault_unbind_command(original[len(_unbind_prefix):].strip()), "fast-command"
 
     # Natural-language rule creation (Phase 54). Returns None for anything that
     # is not a recognisable schedule/trigger, so ordinary requests fall through

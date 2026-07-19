@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Callable
+from urllib.parse import urlparse
 
 from .ui_locator import UiTarget
 
@@ -42,6 +43,12 @@ _FALSY = {"", "0", "false", "no", "off"}
 # and UIAutomation calls cross a COM boundary. Cap both so grounding cannot hang.
 _MAX_NODES = 600
 _MAX_DEPTH = 14
+
+# Roles worth an extra COM round-trip for their ValuePattern (Phase 67). Most
+# controls (buttons, headings, checkboxes, ...) never carry one; restricting
+# the attempt to roles that plausibly do keeps the per-node cost the walk was
+# already bounded against from growing on every one of up to 600 nodes.
+_VALUE_PATTERN_ROLES = frozenset({"edit", "document", "combobox"})
 
 # Default confidence a caller must clear to act. Mirrors screen.click's floor.
 _DEFAULT_MIN_CONFIDENCE = 0.75
@@ -91,7 +98,16 @@ _ROLE_SYNONYMS: dict[str, frozenset[str]] = {
 
 @dataclass(frozen=True)
 class RawElement:
-    """One control from an accessibility tree — provider-agnostic."""
+    """One control from an accessibility tree — provider-agnostic.
+
+    ``value`` (Phase 67) is the control's UIA ValuePattern text, e.g. what a
+    Chrome/Edge omnibox Edit control holds — the page URL. Defaulted to ``""``
+    deliberately: many tests across this project construct ``RawElement``
+    positionally or by keyword without it, and a defaulted field keeps every
+    one of them working unchanged. Most controls have no value pattern at all
+    (buttons, headings, ...), so "" is also the ordinary, ambient case, not a
+    special one.
+    """
 
     name: str
     role: str
@@ -101,6 +117,7 @@ class RawElement:
     height: int
     enabled: bool = True
     on_screen: bool = True
+    value: str = ""
 
     @property
     def center(self) -> tuple[int, int]:
@@ -249,6 +266,21 @@ def _uiautomation_elements() -> list[RawElement]:
             if name and rect is not None:
                 left, top = int(rect.left), int(rect.top)
                 width, height = int(rect.right - rect.left), int(rect.bottom - rect.top)
+                value = ""
+                if role.strip().lower() in _VALUE_PATTERN_ROLES:
+                    # Best-effort only: a control with no ValuePattern (most of
+                    # them) or a COM hiccup degrades to "", never raises, and
+                    # never aborts collecting this node's other fields. This is
+                    # how Chrome/Edge's omnibox Edit control exposes the
+                    # current page URL -- see grounding.read_origin().
+                    try:
+                        get_value_pattern = getattr(control, "GetValuePattern", None)
+                        if callable(get_value_pattern):
+                            pattern = get_value_pattern()
+                            if pattern is not None:
+                                value = str(getattr(pattern, "Value", "") or "")
+                    except Exception:
+                        value = ""
                 collected.append(
                     RawElement(
                         name=name,
@@ -259,6 +291,7 @@ def _uiautomation_elements() -> list[RawElement]:
                         height=height,
                         enabled=bool(getattr(control, "IsEnabled", True)),
                         on_screen=not bool(getattr(control, "IsOffscreen", False)),
+                        value=value,
                     )
                 )
             if depth < _MAX_DEPTH:
@@ -449,6 +482,124 @@ def _summarize_targets(targets: list[dict[str, object]]) -> str:
     return f"Visible controls ({len(targets)}): " + "; ".join(parts) + more + "."
 
 
+# -- browser origin binding (Phase 67) ---------------------------------------
+#
+# The gap this closes: grounding matches LABELS, not origin. A hostile page
+# with a field literally named "Email" gets `@vault:email` filled into it --
+# the label match cannot tell "the right kind of field" from "the right
+# SITE". Phase 63/64 re-verify the foreground WINDOW before every field (a
+# focus-theft / wrong-window defense); this is the missing identity half --
+# the right-looking window may simply be the wrong site.
+#
+# Chrome and Edge expose their address bar as an Edit control in the SAME
+# accessibility tree this module already walks, named "Address and search
+# bar" in English locales, whose ValuePattern holds the current page's URL.
+# That control is deliberately the trust anchor here: page content can
+# rewrite its own <title> (see form_filler._window_identity's comment) and
+# its own DOM, but it cannot touch the browser's own chrome -- the address
+# bar is the one place a page cannot lie. Reading it from the tree is also
+# non-invasive, unlike `chrome_copy_current_url` (Ctrl+L/Ctrl+C), which
+# steals focus and clobbers the clipboard mid-form -- exactly the kind of
+# side effect this module has avoided everywhere else.
+#
+# Two honesty notes, worth restating anywhere this gets used or described:
+#   * This is the domain the BROWSER CHROME reports, not the DOM's true
+#     origin. It is the right trust anchor (page content cannot alter browser
+#     chrome), but it is a proxy, not the real thing -- never claim otherwise.
+#   * Only Chrome/Edge are known to expose this control under this name.
+#     Other browsers, and kiosk/fullscreen modes that hide the omnibox
+#     entirely, have no readable origin -- see is_browser_window() below for
+#     how that absence is handled rather than papered over.
+
+_ADDRESS_BAR_LABEL = "Address and search bar"
+
+
+def _find_address_bar(elements: list[RawElement]) -> RawElement | None:
+    target = _normalize(_ADDRESS_BAR_LABEL)
+    for element in elements:
+        if _normalize(element.name) == target:
+            return element
+    return None
+
+
+def is_browser_window(
+    elements: list[RawElement] | None = None,
+    *,
+    provider: Callable[[], list[RawElement]] | None = None,
+) -> bool:
+    """Whether the CURRENT foreground surface looks like a browser.
+
+    Detected by the presence of the Chrome/Edge omnibox control itself in the
+    accessibility tree -- not a process-name guess, and true even if the
+    omnibox's value could not be parsed into a domain (e.g. a blank new-tab
+    page). Pass an already-enumerated ``elements`` list to share one tree walk
+    with :func:`read_origin`; otherwise this enumerates its own (subject to
+    the same flag gate and fail-safe empty-list behaviour as everything else
+    in this module).
+    """
+    els = elements if elements is not None else enumerate_elements(provider)
+    return _find_address_bar(els) is not None
+
+
+def _domain_from_omnibox_text(text: str) -> str:
+    """Best-effort domain extraction from an omnibox's displayed text.
+
+    The omnibox display text is routinely SHORTENED by the browser (scheme
+    hidden, trailing path/query trimmed, sometimes just "example.com/search"),
+    so this never assumes a full, well-formed URL. "" on anything that does
+    not look like it has a domain at all -- never raises.
+    """
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    candidate = text if "://" in text else f"https://{text}"
+    try:
+        netloc = urlparse(candidate).netloc
+    except Exception:
+        return ""
+    netloc = netloc.rsplit("@", 1)[-1]  # drop any userinfo@ prefix
+    netloc = netloc.split(":", 1)[0]     # drop a port suffix
+    return netloc.strip().lower()
+
+
+@dataclass(frozen=True)
+class Origin:
+    """A browser origin read from the address bar -- domain plus the raw text
+    it was parsed from (kept for diagnostics/manifests, never asserted to be
+    a full URL)."""
+
+    domain: str
+    raw_value: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {"domain": self.domain, "raw_value": self.raw_value}
+
+
+def read_origin(
+    elements: list[RawElement] | None = None,
+    *,
+    provider: Callable[[], list[RawElement]] | None = None,
+) -> "Origin | None":
+    """The current page's domain, read from the browser chrome -- or ``None``.
+
+    ``None`` whenever there is nothing trustworthy to report: grounding is
+    off, no address bar control was found (not a browser, or a browser this
+    module does not recognise), or its value could not be parsed into a
+    domain (e.g. a blank new-tab page, or a kiosk mode that hides the
+    omnibox). Callers must treat ``None`` as "cannot verify", never as "no
+    origin, therefore allowed" -- see form_filler.verify_staged_origin and
+    verify_declared_domain for how that distinction is enforced.
+    """
+    els = elements if elements is not None else enumerate_elements(provider)
+    bar = _find_address_bar(els)
+    if bar is None:
+        return None
+    domain = _domain_from_omnibox_text(bar.value)
+    if not domain:
+        return None
+    return Origin(domain=domain, raw_value=str(bar.value or ""))
+
+
 __all__ = [
     "RawElement",
     "UiTarget",
@@ -461,4 +612,7 @@ __all__ = [
     "Resolution",
     "locate_candidates",
     "describe_visible",
+    "Origin",
+    "is_browser_window",
+    "read_origin",
 ]

@@ -67,7 +67,10 @@ def test_vault_entry_has_no_value_field():
     dumped = asdict(entry)
     assert "value" not in dumped
     # Nothing resembling a secret payload sneaks in via any field either.
-    assert set(dumped.keys()) == {"name", "kind", "label", "created_at", "updated_at", "has_ciphertext"}
+    # "domain" (Phase 67) is plaintext metadata too -- a declared domain
+    # binding, never a secret -- so it belongs here on the same footing as
+    # kind/label, not as an exception to this test's guarantee.
+    assert set(dumped.keys()) == {"name", "kind", "label", "created_at", "updated_at", "has_ciphertext", "domain"}
 
 
 # -- flag off -----------------------------------------------------------------
@@ -415,3 +418,105 @@ def test_on_disk_file_never_contains_the_plaintext_value(tmp_path):
     assert entry["label"] == "Password"
     assert "ciphertext" in entry
     assert secret_value not in entry["ciphertext"]
+
+
+# -- domain binding (Phase 67): plaintext metadata, no re-encryption ----------
+#
+# `@vault:name` closes the phishing-label gap in grounding (which matches
+# TEXT, not origin) by letting an entry declare the one domain it may fill
+# on. This is metadata, exactly like kind/label -- never encrypted, never
+# touching resolve()'s plaintext egress. The enforcement itself (fail CLOSED
+# when the origin cannot be read) lives in eva.screen.form_filler and is
+# tested there, against the real gate; these tests cover only the storage
+# layer's contract.
+
+
+def test_vault_entry_domain_defaults_to_empty_string():
+    entry = VaultEntry(name="email", kind="identity", label="Email", created_at="t0", updated_at="t0")
+    assert entry.domain == ""
+
+
+def test_put_without_domain_defaults_new_entry_to_unbound(tmp_path):
+    _skip_if_no_dpapi()
+    vault = Vault(tmp_path / "vault.json")
+    assert vault.put("email", "me@example.com") is True
+    entries = {e.name: e for e in vault.list_entries()}
+    assert entries["email"].domain == ""
+    assert vault.entry_domain("email") == ""
+
+
+def test_put_with_domain_declares_a_binding(tmp_path):
+    _skip_if_no_dpapi()
+    vault = Vault(tmp_path / "vault.json")
+    assert vault.put("bank_pw", "hunter2", domain="MyBank.com") is True
+    entries = {e.name: e for e in vault.list_entries()}
+    assert entries["bank_pw"].domain == "mybank.com", "domain metadata must be normalized (lowercased)"
+    assert vault.entry_domain("bank_pw") == "mybank.com"
+
+
+def test_put_again_without_domain_preserves_existing_binding(tmp_path):
+    """Re-saving a value (e.g. rotating a password) must not silently clear
+    its domain binding just because the caller didn't repeat it."""
+    _skip_if_no_dpapi()
+    vault = Vault(tmp_path / "vault.json")
+    assert vault.put("bank_pw", "hunter2", domain="mybank.com") is True
+    assert vault.put("bank_pw", "new-password-value") is True  # domain omitted
+    assert vault.entry_domain("bank_pw") == "mybank.com"
+    assert vault.resolve("bank_pw") == "new-password-value"
+
+
+def test_put_with_explicit_empty_domain_clears_binding(tmp_path):
+    _skip_if_no_dpapi()
+    vault = Vault(tmp_path / "vault.json")
+    assert vault.put("bank_pw", "hunter2", domain="mybank.com") is True
+    assert vault.put("bank_pw", "hunter2", domain="") is True
+    assert vault.entry_domain("bank_pw") == ""
+
+
+def test_set_domain_binds_an_existing_entry_without_touching_ciphertext(tmp_path):
+    _skip_if_no_dpapi()
+    vault = Vault(tmp_path / "vault.json")
+    assert vault.put("bank_pw", "hunter2") is True
+    assert vault.set_domain("bank_pw", "MyBank.com") is True
+    assert vault.entry_domain("bank_pw") == "mybank.com"
+    assert vault.resolve("bank_pw") == "hunter2", "set_domain must never touch the ciphertext"
+
+
+def test_set_domain_can_clear_a_binding(tmp_path):
+    _skip_if_no_dpapi()
+    vault = Vault(tmp_path / "vault.json")
+    assert vault.put("bank_pw", "hunter2", domain="mybank.com") is True
+    assert vault.set_domain("bank_pw", "") is True
+    assert vault.entry_domain("bank_pw") == ""
+
+
+def test_set_domain_on_missing_entry_returns_false_and_creates_nothing(tmp_path):
+    vault = Vault(tmp_path / "vault.json")
+    assert vault.set_domain("does_not_exist", "mybank.com") is False
+    assert vault.list_entries() == []
+
+
+def test_entry_domain_for_unknown_name_is_empty_string(tmp_path):
+    vault = Vault(tmp_path / "vault.json")
+    assert vault.entry_domain("nope") == ""
+
+
+def test_entry_domain_never_decrypts(tmp_path, monkeypatch):
+    _skip_if_no_dpapi()
+    calls = {"n": 0}
+    monkeypatch.setattr(dpapi, "unprotect", lambda blob: calls.__setitem__("n", calls["n"] + 1) or None)
+    vault = Vault(tmp_path / "vault.json")
+    assert vault.put("bank_pw", "hunter2", domain="mybank.com") is True
+    assert vault.entry_domain("bank_pw") == "mybank.com"
+    assert calls["n"] == 0, "entry_domain() must never decrypt a value"
+
+
+def test_domain_field_is_plaintext_on_disk(tmp_path):
+    """Consistent with kind/label: a domain binding is metadata, readable in
+    the raw file, never inside the ciphertext blob."""
+    _skip_if_no_dpapi()
+    vault_file = tmp_path / "vault.json"
+    vault = Vault(vault_file)
+    assert vault.put("bank_pw", "hunter2", domain="mybank.com") is True
+    data = json.loads(vault_file.read_text(encoding="utf-8"))
+    assert data["entries"][0]["domain"] == "mybank.com"

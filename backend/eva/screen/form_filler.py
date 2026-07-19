@@ -141,6 +141,14 @@ class StagedForm:
     submit: SubmitSpec
     window_title: str
     created_at: datetime
+    # Phase 67: the browser origin (domain) at STAGING time, and whether the
+    # staged window looked like a browser at all -- see verify_staged_origin
+    # below for how these bind. "" / False are the safe defaults for every
+    # existing caller (including every pre-Phase-67 test) that never learned
+    # about origin binding: they mean "not a browser", which is exactly the
+    # native-app case the guard must not touch.
+    origin_domain: str = ""
+    is_browser: bool = False
 
 
 _STAGED_FORMS: dict[str, StagedForm] = {}
@@ -158,6 +166,8 @@ def stage_form(
     reason: str,
     submit: SubmitSpec,
     window_title: str = "",
+    origin_domain: str = "",
+    is_browser: bool = False,
 ) -> StagedForm:
     """Stage a form for one-shot gated submission. Returns the staged record.
 
@@ -165,6 +175,12 @@ def stage_form(
     boundary): the caller decides the fields and the submit action, and gets
     back a ``spec_id`` opaque enough that nothing downstream needs to see a
     value again until an approved handler resolves it.
+
+    ``origin_domain``/``is_browser`` (Phase 67) are captured the same way
+    ``window_title`` already is -- the caller reads the CURRENT foreground
+    surface (see :func:`foreground_origin`) and passes the result in, rather
+    than this function reaching out on its own; that keeps staging a pure
+    recording step and matches the existing ``window_title`` pattern exactly.
     """
     normalized = tuple(
         f if isinstance(f, FormField) else FormField(str(f[0]), str(f[1])) for f in fields
@@ -177,6 +193,8 @@ def stage_form(
         submit=submit,
         window_title=str(window_title or ""),
         created_at=datetime.now(timezone.utc),
+        origin_domain=str(origin_domain or ""),
+        is_browser=bool(is_browser),
     )
     _STAGED_FORMS[spec_id] = staged
     return staged
@@ -222,6 +240,14 @@ def describe_staged_form(spec: StagedForm) -> str:
         else "Fill and submit a form:"
     )
     lines = [header]
+    if spec.is_browser:
+        # Read from the browser's own address bar, not the DOM's true origin
+        # -- see grounding.py's Phase 67 section for why that distinction
+        # matters and what it does and does not protect against.
+        if spec.origin_domain:
+            lines.append(f"  Page domain: {spec.origin_domain} (from the browser's address bar)")
+        else:
+            lines.append("  Page domain: unreadable (the address bar could not be read at staging time)")
     for index, item in enumerate(spec.fields, start=1):
         if is_vault_ref(item.value):
             name = vault_ref_name(item.value) or "?"
@@ -363,6 +389,127 @@ def ensure_staged_window(staged: "StagedForm") -> str | None:
     return verify_staged_window(staged)
 
 
+# -- origin binding: the identity half of the phishing gap (Phase 67) -------
+#
+# Phase 63/64's window guard above answers "is this still the window I staged
+# against" -- but a page can rewrite its own title, and a phishing page can
+# simply BE styled and titled to look exactly like the real thing while
+# living at a different domain. verify_staged_window cannot see that; it was
+# never meant to. This section adds the missing identity check: does the
+# CURRENT browser origin (read from the address bar, not the DOM) still
+# match the one recorded when the form was staged.
+#
+# The judgement call this turns on, stated plainly because it is the whole
+# point of this phase: a native app (Notepad, an installer, a desktop login)
+# has NO origin at all, and "no origin readable" must not silently pass NOR
+# blanket-fail -- either would be wrong (silently passing defeats the guard;
+# blanket-failing breaks every native-app form fill this project already
+# ships). The rule implemented below is:
+#
+#   (a) The guard BINDS whenever the staged window WAS a browser (StagedForm
+#       .is_browser, captured at staging time from the same tree grounding
+#       already walks -- see grounding.is_browser_window). Any domain drift
+#       for a browser-staged form aborts, whether or not any field declares a
+#       required domain -- this is the general phishing defense.
+#   (b) Independently, ANY field whose value is a vault reference to an entry
+#       that DECLARES a required domain (see vault/store.py's `domain` field)
+#       binds too, even in a window that does not look like a browser. A
+#       declared-domain entry that cannot read an origin FAILS CLOSED --
+#       that is the entire point of declaring one: it must never silently
+#       fill on a surface it cannot verify.
+#   (c) An undeclared field in a native (non-browser) window is untouched by
+#       either rule and behaves exactly as it did before this phase existed.
+
+
+def foreground_origin() -> tuple[bool, str]:
+    """``(is_browser, domain)`` for the CURRENT foreground surface.
+
+    Reads the same accessibility tree grounding already walks (one shared
+    enumeration for both facts, not two). Never raises: any failure -- flag
+    off, library absent, no browser, unreadable omnibox -- degrades to
+    ``(False, "")``, the same "not a browser" case a native app produces
+    honestly. Mirrors :func:`foreground_window_title`'s never-fail contract.
+    """
+    try:
+        from .grounding import enumerate_elements, is_browser_window, read_origin
+
+        elements = enumerate_elements()
+        browser = is_browser_window(elements)
+        origin = read_origin(elements)
+        return browser, (origin.domain if origin else "")
+    except Exception:
+        return False, ""
+
+
+def _normalize_domain_for_compare(domain: str) -> str:
+    """Case-fold and strip a leading "www." so the same site does not
+    spuriously mismatch itself. Deliberately NOT a substring/containment
+    match -- "mybank.com" must never be satisfied by
+    "mybank.com.attacker.example" merely because it appears inside it, the
+    way target_verifier's looser UI-observation heuristic works elsewhere in
+    this project. This is a security boundary, not a UI hint, so it requires
+    exact (normalized) equality; the only cost is an occasional false ABORT
+    (www vs bare-domain drift), never a false ACCEPT.
+    """
+    text = str(domain or "").strip().lower()
+    if text.startswith("www."):
+        text = text[4:]
+    return text
+
+
+def verify_staged_origin(staged: "StagedForm") -> str | None:
+    """``None`` if the browser origin still matches what this form was staged
+    against; otherwise a human-readable reason it does not.
+
+    Only applies when the staged window WAS a browser (rule (a) above) -- a
+    native app form is untouched. Fails safe in both directions, mirroring
+    ``verify_staged_window``: a browser-staged form whose origin could not be
+    read AT STAGING TIME (``origin_domain`` empty) is itself unverifiable and
+    refused rather than assumed safe, and any domain drift since staging is
+    reported and must abort the run.
+    """
+    if not staged.is_browser:
+        return None
+    expected = _normalize_domain_for_compare(staged.origin_domain)
+    if not expected:
+        return (
+            "the browser's address bar could not be read when this form was staged, "
+            "so its page origin cannot be verified; refusing to type blind"
+        )
+    _, current_domain = foreground_origin()
+    current = _normalize_domain_for_compare(current_domain)
+    if not current or current != expected:
+        return (
+            f"the page origin changed (expected a page on '{staged.origin_domain}', "
+            f"found '{current_domain or '(no readable page origin)'}')"
+        )
+    return None
+
+
+def verify_declared_domain(required_domain: str) -> str | None:
+    """``None`` if the CURRENT browser origin matches ``required_domain`` (a
+    vault entry's declared binding, rule (b) above); otherwise a reason it
+    does not -- including when no origin can be read at all.
+
+    This is the fail-closed half of the design: a declared-domain entry that
+    cannot verify an origin must never fill anyway just because the window
+    does not happen to look like a browser (kiosk mode, an unrecognised
+    browser, or grounding briefly failing) -- that would defeat the entire
+    reason someone declared a domain in the first place.
+    """
+    required = _normalize_domain_for_compare(required_domain)
+    if not required:
+        return None
+    _, current_domain = foreground_origin()
+    current = _normalize_domain_for_compare(current_domain)
+    if not current or current != required:
+        return (
+            f"this saved value is bound to domain '{required_domain}', but the current "
+            f"page origin is '{current_domain or 'unreadable'}'"
+        )
+    return None
+
+
 def _looks_like_secret(value: str) -> bool:
     try:
         from ..privacy.secrets_broker import contains_secret_leak
@@ -482,4 +629,7 @@ __all__ = [
     "verify_staged_window",
     "restore_window_focus",
     "ensure_staged_window",
+    "foreground_origin",
+    "verify_staged_origin",
+    "verify_declared_domain",
 ]

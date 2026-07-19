@@ -89,6 +89,13 @@ class VaultEntry:
     created_at: str
     updated_at: str
     has_ciphertext: bool = True
+    # Phase 67: an optional domain this entry is bound to (e.g. "mybank.com").
+    # "" (the default, and every pre-Phase-67 entry) means unbound -- fills on
+    # any page, exactly like before this field existed. Plaintext metadata,
+    # like kind/label, never a secret; see form_filler.verify_declared_domain
+    # for how a non-empty binding is enforced (fails CLOSED if the current
+    # page's origin cannot be verified, browser or not).
+    domain: str = ""
 
 
 class Vault:
@@ -168,6 +175,7 @@ class Vault:
                             created_at=str(raw.get("created_at", "")),
                             updated_at=str(raw.get("updated_at", "")),
                             has_ciphertext=bool(raw.get("ciphertext")),
+                            domain=str(raw.get("domain", "") or ""),
                         )
                     )
                 except Exception:
@@ -183,11 +191,26 @@ class Vault:
         except Exception:
             return False
 
-    def put(self, name: str, value: str, *, kind: str = "identity", label: str | None = None) -> bool:
+    def put(
+        self,
+        name: str,
+        value: str,
+        *,
+        kind: str = "identity",
+        label: str | None = None,
+        domain: str | None = None,
+    ) -> bool:
         """Encrypt and store ``value``. Returns False and writes NOTHING on any failure.
 
         If DPAPI is unavailable this must never fall back to writing plaintext
         -- if it cannot be encrypted, it is simply not stored.
+
+        ``domain`` (Phase 67) is plaintext metadata, like ``kind``/``label`` --
+        never encrypted, never a secret. ``None`` (the default) PRESERVES
+        whatever domain an existing entry already has (so re-saving a value
+        does not silently clear its binding) and defaults a brand new entry to
+        unbound (``""``). Pass an explicit string (including ``""``) to set or
+        clear the binding outright.
         """
         try:
             key = _normalize_name(name)
@@ -212,6 +235,9 @@ class Vault:
                     existing["label"] = display_label
                     existing["updated_at"] = now
                     existing["ciphertext"] = encoded
+                    if domain is not None:
+                        existing["domain"] = str(domain).strip().lower()
+                    existing.setdefault("domain", "")
                 else:
                     entries.append(
                         {
@@ -221,11 +247,47 @@ class Vault:
                             "created_at": now,
                             "updated_at": now,
                             "ciphertext": encoded,
+                            "domain": str(domain).strip().lower() if domain is not None else "",
                         }
                     )
                 data["entries"] = entries
                 data.setdefault("version", _VERSION)
                 data.setdefault("machine_hint", _machine_hint())
+                return self._write_raw(data)
+        except Exception:
+            return False
+
+    def entry_domain(self, name: str) -> str:
+        """The declared domain binding for ``name`` -- metadata only, no
+        decryption. ``""`` when unknown, the entry does not exist, or it was
+        never bound (the ordinary case for every entry saved before Phase 67
+        and every entry saved without a domain since).
+        """
+        try:
+            key = _normalize_name(name)
+            for raw in self._read_raw().get("entries", []):
+                if isinstance(raw, dict) and str(raw.get("name")) == key:
+                    return str(raw.get("domain", "") or "").strip().lower()
+            return ""
+        except Exception:
+            return ""
+
+    def set_domain(self, name: str, domain: str) -> bool:
+        """Declare (or clear, with ``domain=""``) an EXISTING entry's required
+        domain, without touching its ciphertext. False if the entry does not
+        exist or the write fails; never creates an entry.
+        """
+        try:
+            key = _normalize_name(name)
+            with _lock:
+                data = self._read_raw()
+                entries = data.get("entries", [])
+                existing = next((e for e in entries if str(e.get("name")) == key), None)
+                if existing is None:
+                    return False
+                existing["domain"] = str(domain or "").strip().lower()
+                existing["updated_at"] = _now_iso()
+                data["entries"] = entries
                 return self._write_raw(data)
         except Exception:
             return False
