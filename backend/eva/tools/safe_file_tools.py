@@ -38,11 +38,6 @@ def _safe_path(path: str) -> Path:
     raise ValueError(f"File path '{target}' is outside the allowed local roots.")
 
 
-def file_read_text(path: str) -> dict[str, Any]:
-    target = _safe_path(path)
-    return {"ok": True, "path": str(target), "content": target.read_text(encoding="utf-8", errors="replace")}
-
-
 def file_write_text(path: str, content: str) -> dict[str, Any]:
     target = _safe_path(path)
     action = AgentAction(
@@ -64,14 +59,6 @@ def file_write_text(path: str, content: str) -> dict[str, Any]:
         rollback = rollback_action(action, checkpoint)
         return {"ok": False, "checkpoint": checkpoint.as_dict(), "verification": verification.as_dict(), "rollback": rollback.as_dict()}
     return {"ok": True, "path": str(target), "checkpoint": checkpoint.as_dict() if checkpoint else None, "verification": verification.as_dict()}
-
-
-def file_patch_text(path: str, old: str, new: str) -> dict[str, Any]:
-    target = _safe_path(path)
-    current = target.read_text(encoding="utf-8", errors="replace")
-    if old not in current:
-        return {"ok": False, "error": "old_text_not_found"}
-    return file_write_text(str(target), current.replace(old, new, 1))
 
 
 def file_copy(src: str, dst: str) -> dict[str, Any]:

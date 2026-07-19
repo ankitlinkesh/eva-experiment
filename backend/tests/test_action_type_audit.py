@@ -91,4 +91,17 @@ def test_relabelling_is_gate_preserving(registry):
         counts[cls] = counts.get(cls, 0) + 1
     # Phase 62: confirm 7 -> 8 for "screen.submit_form" (fill+submit a form
     # staged from the trusted console; confirm-class, SAFE_LOCAL_UI).
-    assert counts == {"allow": 84, "override": 12, "confirm": 8}, f"gate class counts drifted: {counts}"
+    #
+    # Phase 70 deleted four unrouted duplicate tools, so these counts drop by
+    # exactly four, and the split says which: allow 84 -> 83 (`app.open`,
+    # SAFE_LOCAL_UI) and override 12 -> 9 (`app.close_request` SYSTEM_CHANGE,
+    # `file.read_text` PRIVACY_FILE_READ, `file.patch_text`
+    # DESTRUCTIVE_FILE_ACTION). Confirm is unchanged at 8. Every deletion
+    # removed capability; none moved a surviving tool to a weaker class, which
+    # is the property this test actually exists to protect.
+    #
+    # This pin was missed when the tools were deleted because it names no
+    # tool -- a search for the deleted names could not find it. Counts-only
+    # pins are invisible to name-based impact analysis; the same was true of
+    # EXPECTED_TOOL_COUNT in the Phase 66 verifier.
+    assert counts == {"allow": 83, "override": 9, "confirm": 8}, f"gate class counts drifted: {counts}"

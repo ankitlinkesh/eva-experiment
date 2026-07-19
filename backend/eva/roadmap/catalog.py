@@ -78,14 +78,6 @@ def get_execution_boundary_catalog() -> tuple[ExecutionBoundary, ...]:
             tool_id="file.write_text",
         ),
         ExecutionBoundary(
-            "file.patch_text",
-            ExecutionClass.GATED_REAL_ACTION,
-            "not routed by release/roadmap surfaces; requires explicit gate where used",
-            verifier,
-            "Patch surfaces must not become a broad source-edit path.",
-            tool_id="file.patch_text",
-        ),
-        ExecutionBoundary(
             "file.delete",
             ExecutionClass.GATED_REAL_ACTION,
             "destructive override gate",
@@ -116,14 +108,6 @@ def get_execution_boundary_catalog() -> tuple[ExecutionBoundary, ...]:
             verifier,
             "Typing actions are real control and must not be exposed by safe demo commands.",
             tool_id="screen.type_text",
-        ),
-        ExecutionBoundary(
-            "app.open",
-            ExecutionClass.GATED_REAL_ACTION,
-            "local app-control gate",
-            verifier,
-            "Opening apps is a real local action and stays outside safe roadmap/demo commands.",
-            tool_id="app.open",
         ),
         ExecutionBoundary(
             "secrets.sessions.config",

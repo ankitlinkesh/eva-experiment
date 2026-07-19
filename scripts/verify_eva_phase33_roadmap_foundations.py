@@ -20,12 +20,10 @@ EXECUTION_VALUES = {
 
 RISKY_TOOL_EXPECTATIONS = {
     "file.write_text": "gated-real-action",
-    "file.patch_text": "gated-real-action",
     "file.delete": "gated-real-action",
     "message.send_via_ui": "gated-real-action",
     "screen.click": "gated-real-action",
     "screen.type_text": "gated-real-action",
-    "app.open": "gated-real-action",
     "browser_observe": "read-only",
     "workspace_read_file": "read-only",
     "web_search": "read-only",

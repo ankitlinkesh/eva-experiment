@@ -13,7 +13,7 @@ WHAT "REACHABLE" ACTUALLY MEANS -- READ THIS BEFORE TOUCHING THE METHOD
 
 This verifier is deliberately NOT about whether a tool is *callable*.
 ``/api/tools/{tool_name}`` calls ``tools.run(tool_name, **body)`` for ANY
-registered tool, so every one of the 104 tools this file examines is already
+registered tool, so every one of the 100 tools this file examines is already
 callable in principle through that generic, header-guarded endpoint. That is
 exactly the shape of the ``listen_once``/``app.focus`` bug: both were
 callable in principle the whole time; nothing in the product ever chose to
@@ -157,7 +157,7 @@ stranded tool fails the build (it is not yet in the reviewed set), and a
 tool that became reachable but is still listed also fails (the list cannot
 silently rot into over-broad cover).
 
-As of this phase the reviewed set has FOUR entries -- a genuine finding, not
+As first shipped, the reviewed set had FOUR entries -- a genuine finding, not
 a scanner artifact. The first pass at this verifier excluded only
 ``registry.py`` and treated a ``roadmap/catalog.py`` entry as a valid
 reference; under that method only ``app.close_request`` and ``file.read_text``
@@ -172,21 +172,34 @@ tools duplicating a working, actually-routed alternative:
   * ``app.close_request`` -> superseded by ``close_app`` (what the console
     "close app"/"close" commands in ``eva/core/fast_commands.py`` route to).
   * ``app.open`` -> superseded by ``open_app`` (planner-visible, and what
-    the console "open" commands route to). ``app.open`` itself is not
+    the console "open" commands route to). ``app.open`` itself was not
     broken: Phase 64 gave it a correct ``app_window_open`` postcondition and
     it was live-verified working (``reg.run("app.open", app="notepad")``
-    really opened Notepad and correctly reported success) -- it simply has
+    really opened Notepad and correctly reported success) -- it simply had
     no caller.
   * ``file.patch_text`` -> superseded by ``file.write_text`` (its own
-    implementation, ``safe_file_tools.file_patch_text``, delegates to
-    ``file_write_text`` for the actual write; it is ``file.write_text``, not
-    ``file.patch_text``, that other production code actually references).
+    implementation, ``safe_file_tools.file_patch_text``, delegated to
+    ``file_write_text`` for the actual write; it was ``file.write_text``, not
+    ``file.patch_text``, that other production code actually referenced).
   * ``file.read_text`` -> superseded by ``workspace_read_file``
     (planner-visible, allowlist-bounded, what workspace reads route
     through).
 
-Each is retained deliberately rather than deleted, in case a future phase
-wires it up on purpose; see the reasons in ``EXPECTED_UNREACHABLE`` below.
+Each was retained deliberately rather than deleted at the time, in case a
+future phase wired it up on purpose. Phase 70 revisited that call: no phase
+ever did wire any of the four up, each still had a confirmed working
+counterpart, and letting a reviewed-but-permanent exemption list stand in
+for deletion just gives duplication a paper trail instead of removing it.
+Before deleting ``app.open``, its one genuinely load-bearing property -- the
+accurate, independently-checked ``app_window_open`` postcondition Phase 64
+gave it -- was moved onto ``open_app`` (the tool actually being routed to),
+so the routed path gained real verification instead of losing it. All four
+tools, their registry entries, and their remaining code paths were deleted;
+``EXPECTED_UNREACHABLE`` is now empty and ``EXPECTED_TOOL_COUNT`` dropped
+from 104 to 100. ``app.close_request`` was ``SYSTEM_CHANGE`` while its
+survivor ``close_app`` stays the less-gated ``SAFE_LOCAL_UI`` -- that
+asymmetry was noted, not resolved; risk (re)classification is a separate
+decision from reachability and out of scope here.
 """
 
 from __future__ import annotations
@@ -213,7 +226,7 @@ EXCLUDED_FILES = (REGISTRY_FILE, CATALOG_FILE)
 # Ground truth measured directly against the registry. A drift in either
 # number means tools were added/removed or the planner surface changed --
 # either is fine, but it must be a deliberate, reviewed edit to this file.
-EXPECTED_TOOL_COUNT = 104
+EXPECTED_TOOL_COUNT = 100
 EXPECTED_DEFAULT_PLANNER_VISIBLE_COUNT = 72
 EXPECTED_PLAYWRIGHT_PLANNER_VISIBLE_COUNT = 79
 
@@ -224,42 +237,18 @@ EXPECTED_PLAYWRIGHT_PLANNER_VISIBLE_COUNT = 79
 # the planner is the actually-correct fix (see the failure message below for
 # the three options and the trade-off between them).
 #
-# All four entries below are TRUE positives, not scanner false positives:
-# each is genuinely unrouted by anything in the shipped product today, each
-# is still callable via /api/tools/{tool_name} (that is why the wording below
-# says "nothing routes to it", never "cannot be called" -- see the module
-# docstring's opening section on what "reachable" means), and each has a
-# working, actually-routed counterpart that does the same job. They are
-# listed here -- not silently deleted, not given a fake production reference
-# -- so the duplication is visible and reviewable instead of invisible.
-EXPECTED_UNREACHABLE: dict[str, str] = {
-    "app.close_request": (
-        "Registered, gated, and callable via /api/tools, but nothing in the product routes to "
-        "it -- the console 'close app'/'close' commands in eva/core/fast_commands.py route to "
-        "the separate 'close_app' tool instead. Superseded by close_app. Retained deliberately; "
-        "delete or wire it if that changes."
-    ),
-    "app.open": (
-        "Registered, gated, and callable via /api/tools -- it is correct, not broken: Phase 64 "
-        "gave it an accurate app_window_open postcondition and it was live-verified opening a "
-        "real app successfully. But nothing in the product routes to it; the planner-visible "
-        "'open_app' tool is what the console and planner actually use to open apps. Superseded "
-        "by open_app. Retained deliberately; delete or wire it if that changes."
-    ),
-    "file.patch_text": (
-        "Registered, gated, and callable via /api/tools, but nothing in the product routes to "
-        "it -- its own implementation (safe_file_tools.file_patch_text) delegates to "
-        "file_write_text for the actual write, and it is file.write_text, not file.patch_text, "
-        "that other production code references. Superseded by file.write_text. Retained "
-        "deliberately; delete or wire it if that changes."
-    ),
-    "file.read_text": (
-        "Registered, gated, and callable via /api/tools, but nothing in the product routes to "
-        "it -- the planner-visible, allowlist-bounded 'workspace_read_file' tool is what reads "
-        "actually go through. Superseded by workspace_read_file. Retained deliberately; delete "
-        "or wire it if that changes."
-    ),
-}
+# Empty as of Phase 70. The four entries that lived here (app.close_request,
+# app.open, file.patch_text, file.read_text) were deleted outright rather
+# than kept as documented duplicates -- see the module docstring's "THE PIN"
+# section for why deletion, not continued exemption, was the right fix once
+# each one's working, actually-routed counterpart was confirmed. An empty
+# dict here is a claim, not an absence of one: every one of the 100
+# registered tools left is reachable by a real production path. See
+# test_mutation_c_an_empty_expected_unreachable_still_catches_a_stranded_tool
+# in backend/tests/test_tool_reachability.py, which strands a tool on
+# purpose and proves the empty dict still fails the build -- an empty
+# EXPECTED_UNREACHABLE must never be mistaken for "nothing is checked".
+EXPECTED_UNREACHABLE: dict[str, str] = {}
 
 
 def check(value: object, message: str) -> None:
@@ -437,22 +426,23 @@ def main() -> int:
     check(verifier_name in getattr(verify_eva_all, "VERIFIER_DESCRIPTORS"), "master verifier descriptor missing the Phase 66 verifier")
 
     print(
-        "PASS: Phase 66 tool reachability -- 100 of the 104 registered tools are reachable by at "
-        "least one production path (planner-visible under the default-or-Playwright union, or an "
-        "exact string-literal reference in backend/eva/**/*.py outside registry.py AND "
-        "roadmap/catalog.py -- a declarative catalog of tools is not evidence anything calls "
-        "them, and excluding it is what surfaced two of the four entries below). "
+        "PASS: Phase 66 tool reachability -- all 100 registered tools are reachable by at least "
+        "one production path (planner-visible under the default-or-Playwright union, or an exact "
+        "string-literal reference in backend/eva/**/*.py outside registry.py AND roadmap/catalog.py "
+        "-- a declarative catalog of tools is not evidence anything calls them). "
         f"{len(default_visible)} tools are planner-visible by default, {len(pw_visible)} once "
         "EVA_V2_PLAYWRIGHT_ENABLED is set, and the remainder are reached only through production "
-        "callers such as eva/core/fast_commands.py. The remaining 4 -- app.close_request, "
-        "app.open, file.patch_text, file.read_text -- are a shadow family of dotted tools each "
-        "duplicating a working, actually-routed alternative (close_app, open_app, "
-        "file.write_text, workspace_read_file respectively); each is callable via /api/tools but "
-        "nothing in the product chooses to call it, and each is pinned in EXPECTED_UNREACHABLE "
-        "with its counterpart named rather than deleted or laundered behind a fake reference. "
-        "EXPECTED_UNREACHABLE is compared by EXACT MATCH: a newly stranded tool fails the build "
-        "by name, and a tool that becomes reachable while still listed as exempt also fails, so "
-        "the allowlist cannot rot in either direction. This is the complementary check to "
+        "callers such as eva/core/fast_commands.py. EXPECTED_UNREACHABLE is empty as of Phase 70: "
+        "the four dotted duplicates this verifier originally found and pinned here "
+        "(app.close_request, app.open, file.patch_text, file.read_text) were deleted outright "
+        "rather than kept as a documented exemption, once each one's working, actually-routed "
+        "counterpart (close_app, open_app, file.write_text, workspace_read_file respectively) was "
+        "confirmed -- app.open's one load-bearing property, its accurate app_window_open "
+        "postcondition, was moved onto open_app first so the routed path did not lose "
+        "verification. EXPECTED_UNREACHABLE is still compared by EXACT MATCH even though it is "
+        "empty: a newly stranded tool fails the build by name, and a stale exemption for a tool "
+        "that becomes reachable also fails, so the allowlist cannot silently rot into 'nothing is "
+        "checked' in either direction. This is the complementary check to "
         "backend/tests/test_planner_reachability.py, which asserts the opposite, security-facing "
         "direction -- that screen.*/web.*/mcp.* stay OUT of the planner by default."
     )

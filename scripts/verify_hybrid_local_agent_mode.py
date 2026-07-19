@@ -209,10 +209,10 @@ def main() -> int:
         "screen.press",
         "screen.scroll",
         "screen.wait",
-        "file.read_text",
+        "workspace_read_file",
         "file.write_text",
         "file.delete",
-        "app.open",
+        "open_app",
         "message.prepare",
         "message.send_via_ui",
     }

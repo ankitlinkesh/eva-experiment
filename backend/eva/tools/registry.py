@@ -69,10 +69,10 @@ from ..desktop import (
     minimize_window_safe,
     verify_last_action,
 )
-from .app_control_tools import app_close_request, app_focus, app_open, browser_open_url_tool, browser_search_tool
+from .app_control_tools import app_focus, browser_open_url_tool, browser_search_tool
 from .desktop import close_app, media_key, open_app, open_folder, open_url, system_power, system_status, web_search
 from .message_tools import message_confirm_send, message_prepare, message_send_via_ui
-from .safe_file_tools import file_copy, file_delete, file_list_dir, file_move, file_patch_text, file_read_text, file_write_text
+from .safe_file_tools import file_copy, file_delete, file_list_dir, file_move, file_write_text
 from ..browser_automation import playwright_driver
 from ..security import tool_gate
 
@@ -273,6 +273,20 @@ class ToolRegistry:
                 args_schema=_schema({"app": {"type": "string", "enum": sorted(KNOWN_APPS)}}, ["app"]),
                 safety_level="safe",
                 handler=lambda app=None, app_name=None: open_app(str(app or app_name or "")),
+                # Phase 70: inherited from the deleted `app.open` (Phase 64's
+                # app_window_open postcondition), which duplicated this tool but
+                # had no caller (Phase 66). open_app is what the console and
+                # planner actually route to, so it must carry the real
+                # independent postcondition rather than defaulting to
+                # command_result_success (a bare self-report). "opened" means a
+                # window now exists, NOT that it took the foreground -- see
+                # app.focus's app_window_active below for the contrasting case,
+                # and tools/postconditions.py for why the two must stay separate
+                # methods. The `app` argument name matches what
+                # derive_postcondition's app_window_open branch extracts
+                # (_first(args, "app", "query", "target")), confirmed by reading
+                # both sides rather than assumed.
+                verification_method="app_window_open",
             ),
             "close_app": ToolSpec(
                 name="close_app",
@@ -440,39 +454,12 @@ class ToolRegistry:
                 requires_confirmation=True,
                 verification_method="screen_state_changed",
             ),
-            "file.read_text": ToolSpec(
-                name="file.read_text",
-                description="Read a local text file only after privacy permission.",
-                args_schema=_schema({"path": {"type": "string"}}, ["path"]),
-                safety_level="sensitive",
-                handler=lambda path: file_read_text(str(path)),
-                category="file",
-                risk="medium",
-                action_type="PRIVACY_FILE_READ",
-                risk_categories=("PRIVACY_FILE_READ",),
-                requires_confirmation=True,
-                verification_method="command_result_success",
-            ),
             "file.write_text": ToolSpec(
                 name="file.write_text",
                 description="Write a local text file after override; creates checkpoint and verifies read-back.",
                 args_schema=_schema({"path": {"type": "string"}, "content": {"type": "string"}, "confirmed": {"type": "boolean"}}, ["path", "content"]),
                 safety_level="sensitive",
                 handler=lambda path, content: file_write_text(str(path), str(content)),
-                category="file",
-                risk="high",
-                action_type="DESTRUCTIVE_FILE_ACTION",
-                risk_categories=("DESTRUCTIVE_FILE_ACTION",),
-                requires_confirmation=True,
-                supports_rollback=True,
-                verification_method="file_contains",
-            ),
-            "file.patch_text": ToolSpec(
-                name="file.patch_text",
-                description="Patch a local text file after override; creates checkpoint and verifies read-back.",
-                args_schema=_schema({"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}, "confirmed": {"type": "boolean"}}, ["path", "old", "new"]),
-                safety_level="sensitive",
-                handler=lambda path, old, new: file_patch_text(str(path), str(old), str(new)),
                 category="file",
                 risk="high",
                 action_type="DESTRUCTIVE_FILE_ACTION",
@@ -535,25 +522,6 @@ class ToolRegistry:
                 risk_categories=("SAFE_LOCAL_READ",),
                 verification_method="command_result_success",
             ),
-            "app.open": ToolSpec(
-                name="app.open",
-                description="Open a known local app.",
-                args_schema=_schema({"app": {"type": "string"}}, ["app"]),
-                safety_level="safe",
-                handler=lambda app: app_open(str(app)),
-                category="app",
-                risk="low",
-                action_type="SAFE_LOCAL_UI",
-                risk_categories=("SAFE_LOCAL_UI",),
-                # Phase 64 regression fix: "opened" is not "focused" -- an app
-                # can launch correctly without taking the foreground (e.g.
-                # another process holds the foreground lock, which is the
-                # ordinary case, not an edge case). app_window_active asserts
-                # foreground; that is the wrong postcondition for a launch.
-                # app_window_open asserts the app now has an open window,
-                # regardless of which window is in front.
-                verification_method="app_window_open",
-            ),
             "app.focus": ToolSpec(
                 name="app.focus",
                 description="Focus a visible app/window.",
@@ -565,29 +533,22 @@ class ToolRegistry:
                 action_type="SAFE_LOCAL_UI",
                 risk_categories=("SAFE_LOCAL_UI",),
                 # For focus specifically, "is this the foreground window" IS
-                # the real postcondition -- unlike app.open above.
+                # the real postcondition -- unlike open_app's app_window_open
+                # above (opened is not focused; see that ToolSpec's comment).
                 verification_method="app_window_active",
             ),
-            "app.close_request": ToolSpec(
-                name="app.close_request",
-                description="Request app close with confirmation because unsaved work may exist.",
-                args_schema=_schema({"app": {"type": "string"}, "confirmed": {"type": "boolean"}}, ["app"]),
-                safety_level="sensitive",
-                handler=lambda app, confirmed=False: app_close_request(str(app), bool(confirmed)),
-                category="app",
-                risk="medium",
-                action_type="SYSTEM_CHANGE",
-                risk_categories=("SYSTEM_CHANGE",),
-                requires_confirmation=True,
-                # A successful close's real postcondition is a window now
-                # being ABSENT -- the opposite of app_window_active's "still
-                # focused" question. Nothing here independently verifies
-                # "closed" yet (close_app sends WM_CLOSE and does not wait to
-                # confirm the window is gone), so this declares what it
-                # actually gets, self-reported success, directly rather than
-                # routing through a postcondition method that does not apply.
-                verification_method="command_result_success",
-            ),
+            # Phase 70: `app.open` and `app.close_request` were deleted here.
+            # Phase 66 found both registered, gated, and callable via
+            # /api/tools but reachable from nowhere in the shipped product --
+            # `open_app` (above) and `close_app` (eva/tools/app_control_tools.py
+            # equivalent, registered near the top of this file) were what the
+            # console and planner actually routed to. `app.open`'s only extra
+            # value (a real app_window_open postcondition, Phase 64) was moved
+            # onto `open_app` before deletion so verification did not regress
+            # on the routed path. `app.close_request`'s SYSTEM_CHANGE
+            # action_type was NOT carried over to `close_app` (which stays the
+            # less-gated SAFE_LOCAL_UI) -- that asymmetry is a real, separate
+            # risk-classification question this phase deliberately left alone.
             "message.prepare": ToolSpec(
                 name="message.prepare",
                 description="Prepare a visible message draft locally without sending it.",

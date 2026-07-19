@@ -21,15 +21,23 @@ Covers the provenance contract that makes verification-first execution honest:
     genuinely IS independently checkable (read the real foreground window
     ourselves), so it gets a real ``independent`` check instead;
   * ``app_window_open`` (Phase 64 follow-up) is the mirror-image lesson:
-    giving ``app_window_active`` a real check initially broke ``app.open``,
-    because "opened" is not "focused" -- an app can launch correctly without
-    taking the foreground. Each of ``app.open``/``app.focus``/
-    ``app.close_request`` now declares the ``verification_method`` that
-    actually describes its own postcondition, rather than one method
-    growing a tool-name heuristic to cover three different meanings; and
+    giving ``app_window_active`` a real check initially broke the app-open
+    tool (then ``app.open``), because "opened" is not "focused" -- an app
+    can launch correctly without taking the foreground. Each of
+    ``app.open``/``app.focus``/``app.close_request`` (at the time) declared
+    the ``verification_method`` that actually described its own
+    postcondition, rather than one method growing a tool-name heuristic to
+    cover three different meanings; and
   * the executor wires all of this through so an allow-class tool call
     attaches a ``verification`` dict without demoting ``ok`` unless the
     verification is both independent and failed.
+
+Phase 70 note: ``app.open`` and ``app.close_request`` were later deleted as
+unrouted duplicates of ``open_app``/``close_app`` (Phase 66 found neither
+had a caller anywhere in the shipped product). ``app.open``'s
+``app_window_open`` postcondition was moved onto ``open_app`` before
+deletion, so the tests below that exercise it now target ``open_app`` --
+same mechanism, same regression, routed tool. ``app.focus`` is untouched.
 """
 
 from __future__ import annotations
@@ -38,7 +46,7 @@ from backend.eva.agent.executor import ToolExecutor
 from backend.eva.agent.planner import PlannedToolCall
 from backend.eva.desktop import verifier as desktop_verifier
 from backend.eva.desktop.windows import WindowInfo
-from backend.eva.tools import app_control_tools
+from backend.eva.tools import registry as registry_module
 from backend.eva.tools.postconditions import derive_postcondition, verify_tool_effect
 from backend.eva.tools.registry import ToolRegistry
 
@@ -193,13 +201,13 @@ def test_app_window_active_ignores_the_tool_self_report_entirely(monkeypatch):
 
 
 def test_app_window_active_derives_query_from_app_arg_too(monkeypatch):
-    """app.open uses arg name "app", not "query"."""
+    """open_app uses arg name "app", not "query"."""
     monkeypatch.setattr(desktop_verifier, "get_active_window", lambda: CHROME)
 
-    post = derive_postcondition("app.open", "app_window_active", {"app": "chrome"})
+    post = derive_postcondition("open_app", "app_window_active", {"app": "chrome"})
     assert post.params["query"] == "chrome"
 
-    outcome = verify_tool_effect("app.open", "app_window_active", {"app": "chrome"}, {"ok": True})
+    outcome = verify_tool_effect("open_app", "app_window_active", {"app": "chrome"}, {"ok": True})
     assert outcome.verified is True
 
 
@@ -216,22 +224,28 @@ def test_app_window_active_with_no_recorded_target_is_unverified_not_a_fabricate
     assert outcome.verified is False
 
 
-# -- Phase 64 follow-up: three tools, three distinct verification_method ----
+# -- Phase 64 follow-up: distinct verification_method per tool --------------
 #
 # The original fix special-cased "close" by tool NAME inside the
-# app_window_active branch. That was already one heuristic case; app.open's
-# regression (below) would have been a second, different-shaped case on the
-# same method. Rather than grow the heuristic to cover three meanings on one
-# method name, each tool now declares the verification_method that actually
-# describes its own postcondition. These three tests pin that directly at
-# the registry -- the level where the decision now actually lives.
+# app_window_active branch. That was already one heuristic case; the
+# app-open regression (below) would have been a second, different-shaped
+# case on the same method. Rather than grow the heuristic to cover multiple
+# meanings on one method name, each tool declares the verification_method
+# that actually describes its own postcondition. These tests pin that
+# directly at the registry -- the level where the decision actually lives.
+# (Phase 70: app.open and app.close_request were deleted as unrouted
+# duplicates of open_app/close_app; open_app inherited app.open's
+# app_window_open postcondition before deletion, so it is what the first
+# test below now pins. close_app already declared command_result_success --
+# the same thing app.close_request declared -- so there is nothing new to
+# check there.)
 
 
-def test_app_open_declares_app_window_open_not_app_window_active():
-    spec = ToolRegistry().get("app.open")
+def test_open_app_declares_app_window_open_not_app_window_active():
+    spec = ToolRegistry().get("open_app")
     assert spec is not None
     assert spec.verification_method == "app_window_open", (
-        f"app.open's postcondition is 'a window now exists', not 'is it foreground' -- got {spec.verification_method!r}"
+        f"open_app's postcondition is 'a window now exists', not 'is it foreground' -- got {spec.verification_method!r}"
     )
 
 
@@ -241,8 +255,8 @@ def test_app_focus_declares_app_window_active():
     assert spec.verification_method == "app_window_active", "for focus specifically, foreground IS the postcondition"
 
 
-def test_app_close_request_declares_command_result_success():
-    spec = ToolRegistry().get("app.close_request")
+def test_close_app_declares_command_result_success():
+    spec = ToolRegistry().get("close_app")
     assert spec is not None
     assert spec.verification_method == "command_result_success", (
         "a successful close's real postcondition (window now ABSENT) is not independently checked yet, so this "
@@ -251,7 +265,7 @@ def test_app_close_request_declares_command_result_success():
 
 
 def test_derive_postcondition_app_window_open_extracts_app_arg():
-    post = derive_postcondition("app.open", "app_window_open", {"app": "notepad"})
+    post = derive_postcondition("open_app", "app_window_open", {"app": "notepad"})
     assert post.method == "app_window_open"
     assert post.params["query"] == "notepad"
 
@@ -264,7 +278,7 @@ def test_app_window_open_verifies_when_a_window_exists_regardless_of_foreground(
     notepad = WindowInfo(hwnd=3, title="Untitled - Notepad", process_id=3, process_name="notepad.exe", executable=r"C:\Windows\notepad.exe")
     monkeypatch.setattr(desktop_verifier, "find_window", lambda query, limit=3: [notepad])
 
-    outcome = verify_tool_effect("app.open", "app_window_open", {"app": "notepad"}, {"ok": True})
+    outcome = verify_tool_effect("open_app", "app_window_open", {"app": "notepad"}, {"ok": True})
 
     assert outcome.provenance == "independent"
     assert outcome.independent is True
@@ -272,7 +286,7 @@ def test_app_window_open_verifies_when_a_window_exists_regardless_of_foreground(
 
 
 def test_app_window_open_fails_when_no_window_was_ever_found():
-    outcome = verify_tool_effect("app.open", "app_window_open", {"app": "definitely_not_a_real_app_xyz"}, {"ok": True})
+    outcome = verify_tool_effect("open_app", "app_window_open", {"app": "definitely_not_a_real_app_xyz"}, {"ok": True})
 
     assert outcome.independent is True
     assert outcome.verified is False
@@ -280,18 +294,24 @@ def test_app_window_open_fails_when_no_window_was_ever_found():
 
 # -- Phase 64 follow-up: the exact regression, driven through the real ------
 #    executor + registry, with only the process-launch and window-read seams
-#    stubbed out. This is the centerpiece: a successful app.open, measured on
-#    a real machine, that was being reported to the agent as a failure.
+#    stubbed out. This is the centerpiece: a successful app-open call,
+#    measured on a real machine, that was being reported to the agent as a
+#    failure. (Phase 70: this used to drive the dedicated app.open tool
+#    through app_control_tools.app_open's wrapper; that tool was deleted as
+#    an unrouted duplicate of open_app and its app_window_open postcondition
+#    moved onto open_app, which is what this now drives instead.)
 
 
-def test_app_open_succeeding_without_foreground_is_not_demoted(monkeypatch):
-    """The exact regression: app.open succeeds (the app's window genuinely
-    exists) but another process holds the foreground lock, so the app is NOT
-    the foreground window. This must NOT be treated as a failure -- "opened"
-    is not "focused". Never launches a real process: app_control_tools.open_app
-    (the seam app.open's handler actually calls) is stubbed out."""
+def test_open_app_succeeding_without_foreground_is_not_demoted(monkeypatch):
+    """The exact regression: opening an app succeeds (the app's window
+    genuinely exists) but another process holds the foreground lock, so the
+    app is NOT the foreground window. This must NOT be treated as a failure
+    -- "opened" is not "focused". Never launches a real process: the
+    `open_app` free function bound into eva.tools.registry's own namespace
+    (imported from eva.tools.desktop -- the seam open_app's ToolSpec handler
+    actually calls) is stubbed out."""
     notepad = WindowInfo(hwnd=3, title="Untitled - Notepad", process_id=3, process_name="notepad.exe", executable=r"C:\Windows\notepad.exe")
-    monkeypatch.setattr(app_control_tools, "open_app", lambda app: f"Opening {app}.")
+    monkeypatch.setattr(registry_module, "open_app", lambda app: f"Opening {app}.")
     monkeypatch.setattr(desktop_verifier, "find_window", lambda query, limit=3: [notepad])
     # Deliberately NOT patching get_active_window: app_window_open must never
     # call it at all. If it did, this test would still pass by accident
@@ -299,7 +319,7 @@ def test_app_open_succeeding_without_foreground_is_not_demoted(monkeypatch):
     # the verification method recorded below.
 
     executor = ToolExecutor(ToolRegistry())
-    result = executor.execute(PlannedToolCall(tool="app.open", args={"app": "notepad"}))
+    result = executor.execute(PlannedToolCall(tool="open_app", args={"app": "notepad"}))
 
     assert result.verification is not None
     assert result.verification["method"] == "app_window_open"
@@ -414,3 +434,44 @@ def test_executor_demotes_ok_for_a_genuine_independent_app_window_active_failure
     assert result.verification["independent"] is True
     assert result.verification["verified"] is False
     assert result.ok is False, f"a genuine independent postcondition failure must demote ok: {result.as_dict()}"
+
+
+# --- Phase 70: a post-condition must read every arg name its tool accepts ----
+
+
+def test_app_window_open_reads_the_arg_name_the_console_actually_uses() -> None:
+    """Regression pin for a defect introduced *by* Phase 70's own fix.
+
+    Phase 70 deleted the unrouted ``app.open`` and moved its real
+    ``app_window_open`` post-condition onto the routed survivor ``open_app``,
+    so verification would not regress on the path everyone uses. But
+    ``open_app``'s args_schema advertises ``app`` while the console -- its
+    primary routed caller, and the whole reason the tool survived -- invokes
+    it as ``_run_tool(tools, "open_app", ..., app_name=app)``; the handler
+    accepts either. ``derive_postcondition`` read only ``app``/``query``/
+    ``target``, so on the real console path it recorded no target and the
+    post-condition became INERT: a perfectly successful "open chrome" came
+    back ``verified=False`` / ``unverified``.
+
+    That is the Phase 64 regression shape exactly -- an app that launched
+    correctly reported as not verified -- so it is pinned here per argument
+    name rather than for the one spelling that happened to be tested.
+    """
+    for arg_name in ("app", "app_name", "query", "target"):
+        post = derive_postcondition("open_app", "app_window_open", {arg_name: "notepad"})
+        assert post.method == "app_window_open"
+        assert post.params.get("query") == "notepad", (
+            f"open_app called with {arg_name}= recorded no target, so the "
+            f"post-condition verifies nothing: {post.as_dict()}"
+        )
+
+
+def test_app_window_open_with_no_recoverable_target_stays_unverified() -> None:
+    """The fail-safe must survive the fix above: a genuinely absent target is
+    "we don't know" (unverified), never a fabricated independent failure --
+    an independent False demotes ``ok`` in ToolExecutor and would report
+    working actions as broken."""
+    result = verify_tool_effect("open_app", "app_window_open", {"unrelated": "x"}, {"ok": True})
+    assert result.verified is False
+    assert result.independent is False
+    assert result.provenance == "unverified"

@@ -50,8 +50,7 @@ _WINDOW_METADATA_TOOLS = frozenset({"desktop_observe", "window_active", "window_
 
 # --- Workspace / code reads. ------------------------------------------------
 # REVIEWED DECISION, not an oversight. These read file *contents*, which is
-# literally a PRIVACY_FILE_READ — and the arbitrary-path `file.read_text` IS
-# override-class for exactly that reason. They stay allow-class because:
+# literally a PRIVACY_FILE_READ. They stay allow-class because:
 #   1. they are hard-restricted by the `_safe_path` allowlist to the project and
 #      Documents/Desktop/Downloads, and it denies `.env*`, `.git`, `*.sqlite3`
 #      and key files, so secrets are unreachable through them;
@@ -59,8 +58,17 @@ _WINDOW_METADATA_TOOLS = frozenset({"desktop_observe", "window_active", "window_
 #      every "search my code" behind a typed confirmation would make the
 #      workspace tools unusable and train the user to approve reflexively, which
 #      is worse for safety than the read itself.
-# The asymmetry with file.read_text is deliberate: broad arbitrary-path reads
-# are gated, narrow allowlisted workspace reads are not.
+# The underlying judgment is an asymmetry between broad and narrow reads:
+# an arbitrary-path read (any file, anywhere the OS user can reach) should be
+# gated; a narrow, allowlist-bounded read of the user's own project should
+# not. Phase 66 found the arbitrary-path tool that used to make this contrast
+# concrete, `file.read_text`, had no caller anywhere in the product -- the
+# planner and console only ever routed reads through the allowlisted tools
+# below -- so Phase 70 deleted it rather than let a stranded duplicate keep
+# masquerading as "the gated alternative". The judgment this comment records
+# does not depend on that specific tool existing; the workspace tools below
+# would stay allow-class for the same two reasons even with nothing broader
+# registered at all.
 _WORKSPACE_READ_TOOLS = frozenset(
     {
         "workspace_read_file",

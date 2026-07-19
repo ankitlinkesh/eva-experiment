@@ -192,23 +192,25 @@ def _verify_postcondition_honesty() -> None:
         desktop_verifier.get_active_window = saved_get_active_window
 
     # -- Regression fix: app_window_active is the WRONG postcondition for
-    # app.open ("opened" is not "focused" -- an app can launch correctly
-    # without taking the foreground, which is the ordinary case, not an edge
-    # case). Rather than grow a tool-name heuristic on app_window_active to a
-    # third case, each tool now declares the verification_method that
-    # actually applies to it -- pinned directly at the registry.
+    # opening an app ("opened" is not "focused" -- an app can launch
+    # correctly without taking the foreground, which is the ordinary case,
+    # not an edge case). Rather than grow a tool-name heuristic on
+    # app_window_active to a third case, each tool now declares the
+    # verification_method that actually applies to it -- pinned directly at
+    # the registry. (Phase 70: the dedicated `app.open` tool this regression
+    # was originally found on was deleted as an unrouted duplicate of
+    # `open_app` -- Phase 66 found nothing in the product ever called it --
+    # and its app_window_open postcondition was moved onto `open_app`, the
+    # tool the console/planner actually route to, before deletion. Its
+    # sibling `app.close_request` was deleted outright as a duplicate of
+    # `close_app`, so there is no close-shaped spec left to check here.)
     registry = ToolRegistry()
-    open_spec = registry.get("app.open")
-    check(open_spec is not None and open_spec.verification_method == "app_window_open", "app.open must declare app_window_open, not app_window_active")
+    open_spec = registry.get("open_app")
+    check(open_spec is not None and open_spec.verification_method == "app_window_open", "open_app must declare app_window_open, not app_window_active")
     focus_spec = registry.get("app.focus")
     check(focus_spec is not None and focus_spec.verification_method == "app_window_active", "app.focus must keep app_window_active -- foreground IS the postcondition for focus")
-    close_spec = registry.get("app.close_request")
-    check(
-        close_spec is not None and close_spec.verification_method == "command_result_success",
-        f"a close-shaped tool must not use the focus-based check: {close_spec.verification_method if close_spec else None!r}",
-    )
 
-    post = derive_postcondition("app.open", "app_window_open", {"app": "chrome"})
+    post = derive_postcondition("open_app", "app_window_open", {"app": "chrome"})
     check(post.method == "app_window_open" and post.params["query"] == "chrome", post.as_dict())
 
     # app_window_open is a real independent check of the RIGHT thing (open,
@@ -216,12 +218,12 @@ def _verify_postcondition_honesty() -> None:
     saved_find_window = desktop_verifier.find_window
     try:
         desktop_verifier.find_window = lambda query, limit=3: [notepad]
-        outcome = verify_tool_effect("app.open", "app_window_open", {"app": "notepad"}, {"ok": True})
+        outcome = verify_tool_effect("open_app", "app_window_open", {"app": "notepad"}, {"ok": True})
         check(outcome.provenance == "independent" and outcome.independent is True, outcome.as_dict())
         check(outcome.verified is True, f"app_window_open must verify when a window exists: {outcome.as_dict()}")
 
         desktop_verifier.find_window = lambda query, limit=3: []
-        outcome = verify_tool_effect("app.open", "app_window_open", {"app": "nothing_ever_opened_xyz"}, {"ok": True})
+        outcome = verify_tool_effect("open_app", "app_window_open", {"app": "nothing_ever_opened_xyz"}, {"ok": True})
         check(outcome.independent is True and outcome.verified is False, f"app_window_open must fail when no window is ever found: {outcome.as_dict()}")
     finally:
         desktop_verifier.find_window = saved_find_window
@@ -241,34 +243,39 @@ def _verify_postcondition_honesty() -> None:
 def _verify_app_open_regression_end_to_end() -> None:
     """The centerpiece: the exact regression, measured on a real machine,
     driven through the REAL ToolExecutor + ToolRegistry (not just the
-    postcondition function directly) -- app.open succeeds (the window
+    postcondition function directly) -- open_app succeeds (the window
     genuinely exists) while another process holds the foreground lock, and
     this must NOT be reported as a failure. Never launches a real process:
-    app_control_tools.open_app (the seam app.open's handler actually calls)
-    is stubbed out."""
+    the `open_app` free function (imported into eva.tools.registry from
+    eva.tools.desktop -- the seam open_app's ToolSpec handler actually calls)
+    is stubbed out. (Phase 70: this used to drive the dedicated `app.open`
+    tool through its wrapper in app_control_tools.py; that tool was deleted
+    as an unrouted duplicate and its app_window_open postcondition moved
+    onto `open_app`, which is why the seam and tool name below changed but
+    the regression being pinned did not.)"""
     from backend.eva.agent.executor import ToolExecutor
     from backend.eva.agent.planner import PlannedToolCall
     from backend.eva.desktop import verifier as desktop_verifier
     from backend.eva.desktop.windows import WindowInfo
-    from backend.eva.tools import app_control_tools
+    from backend.eva.tools import registry as registry_module
     from backend.eva.tools.registry import ToolRegistry
 
     notepad = WindowInfo(hwnd=3, title="Untitled - Notepad", process_id=3, process_name="notepad.exe", executable=r"C:\Windows\notepad.exe")
-    saved_open_app = app_control_tools.open_app
+    saved_open_app = registry_module.open_app
     saved_find_window = desktop_verifier.find_window
     try:
-        app_control_tools.open_app = lambda app: f"Opening {app}."
+        registry_module.open_app = lambda app: f"Opening {app}."
         desktop_verifier.find_window = lambda query, limit=3: [notepad]
 
         executor = ToolExecutor(ToolRegistry())
-        result = executor.execute(PlannedToolCall(tool="app.open", args={"app": "notepad"}))
+        result = executor.execute(PlannedToolCall(tool="open_app", args={"app": "notepad"}))
 
         check(result.verification is not None and result.verification["method"] == "app_window_open", result.as_dict())
         check(result.verification["independent"] is True, result.as_dict())
         check(result.verification["verified"] is True, f"the window exists, so this must verify even though it is not foreground: {result.as_dict()}")
         check(result.ok is True, f"a successful open must not be demoted just because the app is not foreground: {result.as_dict()}")
     finally:
-        app_control_tools.open_app = saved_open_app
+        registry_module.open_app = saved_open_app
         desktop_verifier.find_window = saved_find_window
 
 
@@ -502,14 +509,15 @@ def _run() -> int:
         "'focus'/'focus window' command) while staying OUT of planner_specs(), and screen_submit_form attempts "
         "one focus restore before aborting on a staged-window mismatch -- proceeding if the restore fixes it, "
         "still aborting with nothing typed if it does not. Follow-up regression fix: giving app_window_active a "
-        "real independent check initially broke app.open, which also declared that method -- 'opened' is not "
-        "'focused' (another process holding the foreground lock is the ordinary case, not an edge case), so a "
-        "perfectly successful launch was independently demoted to ok=False. Fixed by modelling, not by growing a "
-        "tool-name heuristic further: app.open now declares app_window_open (a real independent check that a "
-        "window exists, via the already-retrying verify_app_opened), app.focus keeps app_window_active (foreground "
-        "IS its postcondition), and app.close_request declares command_result_success directly. "
-        "verify_window_focused also gained the same retry/settle behaviour its siblings already had, so a focus "
-        "landing a moment late is not a false failure either."
+        "real independent check initially broke the app-open tool (then app.open, since Phase 70 deleted as an "
+        "unrouted duplicate of open_app), which also declared that method -- 'opened' is not 'focused' (another "
+        "process holding the foreground lock is the ordinary case, not an edge case), so a perfectly successful "
+        "launch was independently demoted to ok=False. Fixed by modelling, not by growing a tool-name heuristic "
+        "further: open_app now declares app_window_open (a real independent check that a window exists, via the "
+        "already-retrying verify_app_opened), app.focus keeps app_window_active (foreground IS its postcondition), "
+        "and close_app declares command_result_success directly. verify_window_focused also gained the same "
+        "retry/settle behaviour its siblings already had, so a focus landing a moment late is not a false failure "
+        "either."
     )
     return 0
 

@@ -30,18 +30,25 @@ subsumes the other; ``test_known_planner_only_and_source_only_tools_are_both_cov
 below exercises exactly that complementary relationship using
 ``screen.click`` as the concrete example.
 
-THE PINNED FOUR: this verifier's first version excluded only ``registry.py``
-and counted a ``roadmap/catalog.py`` entry as a valid reference. That masked
-two genuinely stranded tools (``app.open``, ``file.patch_text``) behind
-their own catalog entry, on top of the two it did catch
-(``app.close_request``, ``file.read_text``) -- the exact laundering pattern
-this phase exists to catch, in a new costume. ``test_catalog_py_exclusion_is_load_bearing``
-below is a permanent regression test reproducing that defect directly: it
-proves those two tools' ONLY non-registry reference lives inside
-catalog.py, so excluding that one file is precisely what makes them
-surface. The mutation tests further down are the ones that matter most
-beyond that: they prove the detector actually fires (not just that it
-happens to be quiet today).
+THE PINNED FOUR, THEN DELETED: this verifier's first version excluded only
+``registry.py`` and counted a ``roadmap/catalog.py`` entry as a valid
+reference. That masked two genuinely stranded tools (``app.open``,
+``file.patch_text``) behind their own catalog entry, on top of the two it
+did catch (``app.close_request``, ``file.read_text``) -- the exact
+laundering pattern this phase exists to catch, in a new costume. All four
+were pinned in ``EXPECTED_UNREACHABLE`` rather than deleted at the time, in
+case a future phase wired one up on purpose. Phase 70 revisited that call:
+none ever was wired up, each still had a confirmed working counterpart
+(``close_app``, ``open_app``, ``file.write_text``, ``workspace_read_file``
+respectively), and ``app.open``'s one load-bearing property -- Phase 64's
+accurate ``app_window_open`` postcondition -- was moved onto ``open_app``
+before all four were deleted outright, registry entries and all.
+``EXPECTED_UNREACHABLE`` is empty as of Phase 70 and ``EXPECTED_TOOL_COUNT``
+dropped from 104 to 100. The mutation tests further down are the ones that
+matter most: they prove the detector still actually fires on an *empty*
+exemption dict (not just that it happens to be quiet today), which is
+exactly the failure mode an empty allowlist invites -- being silently
+mistaken for "nothing is checked".
 """
 
 from __future__ import annotations
@@ -78,115 +85,152 @@ def _dummy_spec(name: str):
     )
 
 
-# --- Ground truth, pinned. --------------------------------------------------
+# --- Ground truth: the four duplicates are GONE, not merely exempted. -------
 
-# The four true positives this phase found, and the working tool each one
-# duplicates. Kept as one source of truth in this test file so every
-# assertion below about them stays in sync.
-_PINNED_COUNTERPARTS = {
-    "app.close_request": "close_app",
-    "app.open": "open_app",
-    "file.patch_text": "file.write_text",
-    "file.read_text": "workspace_read_file",
-}
+_DELETED_DUPLICATE_TOOLS = {"app.close_request", "app.open", "file.patch_text", "file.read_text"}
+_DELETED_DUPLICATE_COUNTERPARTS = {"close_app", "open_app", "file.write_text", "workspace_read_file"}
 
 
-def test_expected_unreachable_is_pinned_to_the_four_found_duplicates():
-    """As of Phase 66, exactly four registered tools have no product route:
-    a shadow family of dotted tools duplicating a working, actually-routed
-    alternative. If this ever needs a new entry, it must be added
-    deliberately with a written reason -- not grown silently -- and if one
-    of these four gets wired up or deleted, it must come back OUT."""
-    assert set(phase66.EXPECTED_UNREACHABLE) == set(_PINNED_COUNTERPARTS)
+def test_expected_unreachable_is_empty_as_of_phase_70():
+    """The four dotted duplicates Phase 66 found and pinned here were
+    deleted outright in Phase 70 rather than kept as a permanent documented
+    exemption. If a future phase ever needs a new entry, it must be added
+    deliberately with a written reason -- this must never silently grow
+    back to "launder a tool nobody got around to wiring up"."""
+    assert phase66.EXPECTED_UNREACHABLE == {}
 
 
-def test_expected_unreachable_entries_are_true_positives_not_false_claims():
-    """Each pinned entry must (a) name a real counterpart tool that IS
-    itself reachable, and (b) say the tool is still callable via
-    /api/tools rather than falsely claiming it cannot be called -- the
-    coordinator caught this exact wording trap during review. app.open in
-    particular must not be described as broken or dead: Phase 64 gave it a
-    correct postcondition and it was live-verified opening a real app; it
-    simply has no caller."""
+def test_deleted_duplicate_tools_are_gone_not_merely_unreachable():
+    """The distinction that matters: these four are not in EXPECTED_UNREACHABLE
+    because they no longer exist at all, not because someone forgot to keep
+    exempting them. Their counterparts must still be present and reachable."""
     from backend.eva.tools.registry import ToolRegistry
 
     registry = ToolRegistry()
-    reachable = set(registry._tools) - set(phase66.compute_unreachable(registry))
+    for name in _DELETED_DUPLICATE_TOOLS:
+        assert name not in registry._tools, f"{name} should have been deleted in Phase 70, not merely exempted"
 
-    for name, counterpart in _PINNED_COUNTERPARTS.items():
-        reason = phase66.EXPECTED_UNREACHABLE[name]
-        assert counterpart in reason, f"{name}'s justification must name its counterpart {counterpart!r}"
-        assert counterpart in reachable, f"counterpart {counterpart!r} for {name} must itself be reachable"
-        assert "cannot be called" not in reason.lower()
-        assert "route" in reason.lower()
-
-    # app.open's justification is allowed to SAY "not broken" (that is the
-    # correct, reassuring claim); what it must never do is describe app.open
-    # itself as broken/dead/unimplemented without immediately refuting it.
-    # Check for the affirmative claim rather than bare word-absence, since
-    # "it is correct, not broken" legitimately contains the word "broken".
-    app_open_reason = phase66.EXPECTED_UNREACHABLE["app.open"].lower()
-    assert "correct" in app_open_reason or "working" in app_open_reason or "live-verified" in app_open_reason
-    assert "dead" not in app_open_reason
-    assert "unimplemented" not in app_open_reason
+    unreachable = phase66.compute_unreachable(registry)
+    for counterpart in _DELETED_DUPLICATE_COUNTERPARTS:
+        assert counterpart in registry._tools, f"counterpart {counterpart!r} must still be registered"
+        assert counterpart not in unreachable, f"counterpart {counterpart!r} must still be reachable"
 
 
-def test_default_registry_unreachable_set_matches_the_pin_exactly():
+def test_open_app_carries_the_postcondition_moved_from_the_deleted_app_open():
+    """The one piece of real behavior that had to survive the deletion:
+    app.open's accurate, independent app_window_open postcondition (Phase
+    64) was moved onto open_app -- the tool the console/planner actually
+    route to -- before app.open was deleted, so the routed path did not
+    regress to a bare self-report."""
+    from backend.eva.tools.registry import ToolRegistry
+
+    spec = ToolRegistry().get("open_app")
+    assert spec is not None
+    assert spec.verification_method == "app_window_open", (
+        f"open_app must carry the real independent postcondition moved from the deleted app.open, "
+        f"got {spec.verification_method!r}"
+    )
+
+
+def test_default_registry_unreachable_set_is_empty():
     from backend.eva.tools.registry import ToolRegistry
 
     registry = ToolRegistry()
     unreachable = phase66.compute_unreachable(registry)
-    assert set(unreachable) == set(phase66.EXPECTED_UNREACHABLE), (
-        f"computed unreachable set drifted from the pin: {sorted(unreachable)}"
-    )
+    assert unreachable == {}, f"computed unreachable set drifted from the pin (now empty): {sorted(unreachable)}"
 
 
 def test_verifier_main_passes_against_the_real_registry():
     assert phase66.main() == 0
 
 
-def test_catalog_py_exclusion_is_load_bearing():
-    """Regression test for the exact defect the coordinator's review
-    caught: counting roadmap/catalog.py as a production reference masks
-    real stranded tools behind a purely declarative catalog entry.
+def test_catalog_py_exclusion_is_load_bearing(monkeypatch):
+    """Regression test for the exact defect the coordinator's review caught:
+    counting roadmap/catalog.py as a production reference masks real
+    stranded tools behind a purely declarative catalog entry.
 
-    Directly reproduce it: app.open and file.patch_text's ONLY
-    non-registry reference anywhere in backend/eva is inside catalog.py.
-    With catalog.py wrongly counted (the pre-fix method -- only
-    registry.py excluded), both look referenced. With catalog.py
-    correctly excluded (the current method), neither does -- which is
-    exactly why both now live in EXPECTED_UNREACHABLE instead of silently
-    passing for the wrong reason."""
+    Phase 66 found this concretely via app.open and file.patch_text -- both
+    had catalog.py as their ONLY non-registry reference. Phase 70 deleted
+    both tools (and their catalog.py entries) once each was confirmed
+    superseded, so that specific historical repro no longer exists to point
+    at -- and, checked directly rather than assumed
+    (test_no_registered_tool_is_currently_catalog_only below), no other
+    currently-registered tool is catalog-only either. This test keeps the
+    general mechanism honestly covered with a synthetic case instead of a
+    stale hardcoded one: a dummy name is made to appear in catalog.py's own
+    string constants (by wrapping ``_string_constants`` for that one path),
+    then the test proves (a) the current, correct method -- which never even
+    reads catalog.py, because CATALOG_FILE is in EXCLUDED_FILES and
+    ``_iter_production_files()`` skips it entirely -- does not count the
+    dummy as referenced, while (b) a pre-fix, only-registry.py-excluded scan
+    WOULD have wrongly counted it, reproducing exactly how
+    app.open/file.patch_text were masked."""
     from backend.eva.tools.registry import ToolRegistry
 
-    catalog_names = phase66._string_constants(phase66.CATALOG_FILE)
-    assert "app.open" in catalog_names
-    assert "file.patch_text" in catalog_names
+    dummy_name = "zzz_test_catalog_only_dummy_tool"
+    real_string_constants = phase66._string_constants
 
-    # Pre-fix method: only registry.py excluded.
+    def fake_string_constants(path):
+        if path.resolve() == phase66.CATALOG_FILE:
+            return real_string_constants(path) | {dummy_name}
+        return real_string_constants(path)
+
+    monkeypatch.setattr(phase66, "_string_constants", fake_string_constants)
+
+    # Current, correct method: _iter_production_files() skips CATALOG_FILE
+    # entirely, so _string_constants is never even called on it here -- the
+    # dummy's "mention" is structurally invisible.
+    referenced_with_catalog_excluded = phase66._production_referenced_names()
+    assert dummy_name not in referenced_with_catalog_excluded
+
+    # Pre-fix method: only registry.py excluded. Reproduces the exact
+    # masking bug -- the dummy now looks referenced purely because
+    # catalog.py (wrongly counted) mentions it.
     referenced_without_catalog_exclusion: set[str] = set()
     for path in sorted(phase66.BACKEND_EVA.rglob("*.py")):
         if path.resolve() == phase66.REGISTRY_FILE:
             continue
         referenced_without_catalog_exclusion |= phase66._string_constants(path)
-    assert "app.open" in referenced_without_catalog_exclusion, (
-        "premise broken: app.open should look referenced when only registry.py is excluded"
-    )
-    assert "file.patch_text" in referenced_without_catalog_exclusion, (
-        "premise broken: file.patch_text should look referenced when only registry.py is excluded"
+    assert dummy_name in referenced_without_catalog_exclusion, (
+        "premise broken: the dummy should look referenced when only registry.py is excluded"
     )
 
-    # Current method: registry.py AND catalog.py excluded.
-    referenced_with_catalog_excluded = phase66._production_referenced_names()
-    assert "app.open" not in referenced_with_catalog_excluded
-    assert "file.patch_text" not in referenced_with_catalog_excluded
-
-    # And the live effect: both are genuinely unreachable against the real
-    # registry today, matching the pin above.
+    # And the live effect against a real registry with the dummy registered:
+    # correctly excluding catalog.py leaves it unreachable.
     registry = ToolRegistry()
-    unreachable = phase66.compute_unreachable(registry)
-    assert "app.open" in unreachable
-    assert "file.patch_text" in unreachable
+    registry._tools[dummy_name] = _dummy_spec(dummy_name)
+    try:
+        unreachable = phase66.compute_unreachable(registry)
+        assert dummy_name in unreachable
+    finally:
+        del registry._tools[dummy_name]
+
+
+def test_no_registered_tool_is_currently_catalog_only():
+    """Empirical companion to the synthetic test above: confirms, computed
+    fresh against the real registry and real catalog.py rather than assumed,
+    that no currently-registered tool relies on catalog.py's exclusion to be
+    correctly classified unreachable today. This can legitimately change in
+    the future (a new tool could get catalog-only'd the same way app.open
+    did); if it does, that is real signal, not a reason to weaken this
+    check."""
+    from backend.eva.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    all_tools = set(registry._tools)
+
+    referenced_without_catalog_exclusion: set[str] = set()
+    for path in sorted(phase66.BACKEND_EVA.rglob("*.py")):
+        if path.resolve() == phase66.REGISTRY_FILE:
+            continue
+        referenced_without_catalog_exclusion |= phase66._string_constants(path)
+
+    referenced_with_catalog_excluded = phase66._production_referenced_names()
+    catalog_only = (referenced_without_catalog_exclusion - referenced_with_catalog_excluded) & all_tools
+    assert catalog_only == set(), (
+        f"these registered tools are currently reachable only through roadmap/catalog.py's declarative "
+        f"entries -- that is exactly the masking pattern Phase 66/70 fixed, they need a real caller: {catalog_only}"
+    )
 
 
 # --- Complementary relationship with test_planner_reachability.py. ---------
@@ -250,22 +294,28 @@ def test_mutation_a_an_unwired_registered_tool_is_caught_and_named():
     finally:
         del registry._tools[dummy_name]
 
-    # Removing it restores exactly the pinned baseline (the four known
-    # duplicates, no more) -- proves this is live detection against the
-    # current registry state, not a stale fixture.
+    # Removing it restores exactly the pinned baseline -- empty as of Phase
+    # 70 -- proving this is live detection against the current registry
+    # state, not a stale fixture.
     clean = phase66.compute_unreachable(registry)
     assert dummy_name not in clean
-    assert set(clean) == set(phase66.EXPECTED_UNREACHABLE)
+    assert clean == {} == phase66.EXPECTED_UNREACHABLE
 
 
-def test_mutation_a_drives_a_real_verifier_failure_naming_the_tool(monkeypatch):
-    """End-to-end version of mutation A: patch ToolRegistry so main() itself
-    sees the stranded dummy tool, and confirm the verifier raises and names
-    it. EXPECTED_TOOL_COUNT is bumped alongside the mutation so this test
-    isolates the unreachable-set check specifically -- the separately
-    pinned tool-count check is not the mechanism under test here, and
-    letting it fire first would make this test pass for the wrong reason."""
+def test_mutation_c_an_empty_expected_unreachable_still_catches_a_stranded_tool(monkeypatch):
+    """The mutation that matters most now that EXPECTED_UNREACHABLE is
+    empty: an empty exemption dict must never be mistaken for "nothing is
+    checked". Patch ToolRegistry so main() itself sees a stranded dummy
+    tool, and confirm the verifier -- running against the REAL, empty
+    EXPECTED_UNREACHABLE, no monkeypatching of that dict needed -- still
+    raises and names it. EXPECTED_TOOL_COUNT is bumped alongside the
+    mutation so this test isolates the unreachable-set check specifically --
+    the separately pinned tool-count check is not the mechanism under test
+    here, and letting it fire first would make this test pass for the wrong
+    reason."""
     from backend.eva.tools import registry as registry_module
+
+    assert phase66.EXPECTED_UNREACHABLE == {}, "this test's premise is an empty exemption dict"
 
     dummy_name = "zzz_test_stranded_dummy_tool"
     real_init = registry_module.ToolRegistry.__init__
@@ -286,11 +336,12 @@ def test_mutation_a_drives_a_real_verifier_failure_naming_the_tool(monkeypatch):
 
 
 def test_mutation_b_a_wrongly_allowlisted_reachable_tool_fails_exact_match(monkeypatch):
-    """Mutate EXPECTED_UNREACHABLE to falsely claim a genuinely reachable
-    tool ("screen.click") is exempt. The exact-match comparison -- not a
-    superset/subset check -- must catch this: an allowlist entry for a tool
-    that is actually reachable is exactly how the list would rot into
-    over-broad cover over time."""
+    """Mutate EXPECTED_UNREACHABLE (now empty) to falsely claim a genuinely
+    reachable tool ("screen.click") is exempt. The exact-match comparison --
+    not a superset/subset check -- must catch this: an allowlist entry for a
+    tool that is actually reachable is exactly how the list would rot into
+    over-broad cover over time, and an empty dict is not immune to that --
+    it just means there is currently nothing wrongly listed."""
     monkeypatch.setitem(
         phase66.EXPECTED_UNREACHABLE,
         "screen.click",

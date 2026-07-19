@@ -51,7 +51,13 @@ def check(value: object, message: str) -> None:
 # gate has to say so out loud rather than drift.
 # Phase 62: confirm 7 -> 8 for the new "screen.submit_form" tool (fill+submit a
 # form staged from the trusted console; confirm-class, SAFE_LOCAL_UI).
-EXPECTED_CLASS_COUNTS = {"allow": 84, "override": 12, "confirm": 8}
+# Phase 70: four unrouted duplicate tools were deleted, so the totals fall by
+# exactly four -- allow 84 -> 83 (`app.open`, SAFE_LOCAL_UI) and override
+# 12 -> 9 (`app.close_request` SYSTEM_CHANGE, `file.read_text`
+# PRIVACY_FILE_READ, `file.patch_text` DESTRUCTIVE_FILE_ACTION); confirm is
+# unchanged. Deleting a tool only ever removes capability, and no surviving
+# tool moved to a weaker class -- which is the direction this pin guards.
+EXPECTED_CLASS_COUNTS = {"allow": 83, "override": 9, "confirm": 8}
 
 SCREEN_CAPTURE_TOOLS = ("capture_screen", "analyze_screen", "screen.observe")
 

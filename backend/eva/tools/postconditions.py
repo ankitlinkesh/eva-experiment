@@ -54,6 +54,27 @@ the postcondition), ``app.close_request`` → ``command_result_success``
 (nothing here independently checks "window now absent" yet, so it declares
 what it actually gets rather than routing through a method that does not
 apply). No tool-name sniffing is needed for any of the three.
+
+Phase 70 note: ``app.open`` and ``app.close_request`` no longer exist as
+registered tools — Phase 66 found neither had any caller in the shipped
+product (``open_app``/``close_app`` were what the console and planner
+actually routed to), so both dotted duplicates were deleted rather than left
+stranded. Before deleting ``app.open``, its ``app_window_open`` postcondition
+(the real, independent check described above) was moved onto ``open_app`` so
+the routed path did not lose verification in the process. That move needed a
+fix here that was initially missed: ``open_app``'s args_schema advertises
+``app``, but its handler also accepts ``app_name`` — and the console, its
+primary routed caller, uses exactly that spelling. Reading only ``app``
+recorded no target, making the freshly-moved postcondition INERT on the one
+path it was moved to protect, and reporting a successful "open chrome" as
+``verified=False``/``unverified`` — the Phase 64 regression shape all over
+again. ``_first`` below now reads every argument name the tool accepts; a
+postcondition that reads fewer verifies nothing while looking correct.
+``app.focus`` (``app_window_active``) is
+unaffected and still declares its own postcondition directly, as does
+``close_app``, which still declares ``command_result_success`` like
+``app.close_request`` did (nothing independently checks "window now absent"
+for it either).
 """
 
 from __future__ import annotations
@@ -145,22 +166,35 @@ def derive_postcondition(tool_name: str, verification_method: str, args: dict[st
         return PostCondition("file_exists", {"path": path}, f"{path or 'file'} exists")
 
     if method == "app_window_open":
-        # app.open declares this: "opened" means a window now exists, NOT
-        # that it took the foreground (that would be app_window_active, and
-        # conflating the two was a real regression -- an app can launch
-        # correctly while another process holds the foreground lock, which
-        # is the ordinary case, not an edge case).
-        query = _first(args, "app", "query", "target")
+        # open_app declares this (moved here from the now-deleted app.open in
+        # Phase 70): "opened" means a window now exists, NOT that it took the
+        # foreground (that would be app_window_active, and conflating the two
+        # was a real regression -- an app can launch correctly while another
+        # process holds the foreground lock, which is the ordinary case, not
+        # an edge case).
+        #
+        # ``app_name`` is in this list because the CONSOLE -- open_app's
+        # primary routed caller, and the reason the tool survived Phase 70 --
+        # calls it as `_run_tool(tools, "open_app", ..., app_name=app)` (see
+        # core/fast_commands.py), while its args_schema advertises `app`. The
+        # handler accepts either. Reading only `app` made this post-condition
+        # INERT on the exact path it was ported to protect: no target
+        # recorded, so a perfectly successful "open chrome" came back
+        # verified=False/unverified -- the same shape as the Phase 64
+        # regression where an app that launched fine was reported as failed.
+        # A post-condition must read every argument name its tool accepts, or
+        # it silently verifies nothing.
+        query = _first(args, "app", "app_name", "query", "target")
         return PostCondition("app_window_open", {"query": query}, f"{query or 'the requested app'} has an open window")
 
     if method == "app_window_active":
-        # Only app.focus declares this now (app.open uses app_window_open
-        # above; app.close_request declares command_result_success directly
-        # on its ToolSpec, since a successful close's postcondition -- the
-        # window is now ABSENT -- is the opposite of "still focused" and
-        # nothing here independently checks that yet). No name sniffing
-        # needed: each tool declares the verification_method that actually
-        # applies to it, rather than this function guessing from the name.
+        # Only app.focus declares this now (open_app uses app_window_open
+        # above; close_app declares command_result_success directly on its
+        # ToolSpec, since a successful close's postcondition -- the window is
+        # now ABSENT -- is the opposite of "still focused" and nothing here
+        # independently checks that yet). No name sniffing needed: each tool
+        # declares the verification_method that actually applies to it,
+        # rather than this function guessing from the name.
         query = _first(args, "query", "app", "target")
         return PostCondition("app_window_active", {"query": query}, f"{query or 'the requested window'} is the active foreground window")
 
