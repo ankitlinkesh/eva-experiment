@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from ..tools.postconditions import PROVENANCE_UNVERIFIED
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -52,6 +54,14 @@ class VerificationResult:
     evidence: str
     failure_reason: str | None = None
     suggested_repair: str | None = None
+    # Phase 69: how much this actually knows -- mirrors
+    # tools/postconditions.PostConditionResult's provenance contract.
+    # ``independent`` True only for a real OS/file-state check performed here;
+    # ``provenance`` is one of the PROVENANCE_* constants from
+    # tools/postconditions.py (default "unverified": no verification method
+    # applied, or none here can independently confirm it).
+    independent: bool = False
+    provenance: str = PROVENANCE_UNVERIFIED
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

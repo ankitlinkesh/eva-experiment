@@ -7,6 +7,7 @@ from ..guardrails.llm_guard_adapter import guard_input
 from ..observability.traces import end_trace, log_agent_selection, log_dry_run_preview, log_execution_bridge, log_verification, start_trace
 from ..runtime.formatters import format_v2_dry_run_response
 from ..schemas.results import EvaVerificationResult
+from ..tools.postconditions import PROVENANCE_INDEPENDENT, PROVENANCE_SELF_REPORTED
 from .execution_bridge import execute_v2_allowlisted_action
 from .execution_policy import evaluate_v2_execution_allowed
 from .feature_flags import get_v2_feature_flags
@@ -194,21 +195,87 @@ def verify_node(state: EvaRuntimeState) -> EvaRuntimeState:
         return state
     if state.execution_mode == "v2_execute":
         if state.execution_refused_reason:
-            result = EvaVerificationResult(
-                action_id=state.task_id,
-                verified=True,
-                confidence=0.9,
-                evidence="Execution was safely refused before any tool ran.",
-                source="v2_execute",
-            )
+            # Phase 69: this used to assert "before any tool ran"
+            # unconditionally. That is true for a refusal from the permission
+            # gate (execution_policy.evaluate_v2_execution_allowed) -- nothing
+            # runs before that check. But execution_bridge._run_readonly_delegate
+            # also lands here when a read-only delegate DID run and reported
+            # it could not complete (executed_by/executed_actions are set in
+            # that case, unlike the gate-refusal path). Distinguish the two
+            # rather than claiming the stronger, code-proven fact ("nothing
+            # ran") for a case where something demonstrably did.
+            attempted = bool(state.executed_by) or bool(state.executed_actions)
+            if attempted:
+                result = EvaVerificationResult(
+                    action_id=state.task_id,
+                    verified=False,
+                    confidence=0.3,
+                    evidence=f"Execution did not complete: {state.execution_refused_reason}",
+                    failure_reason="execution_attempted_but_refused",
+                    suggested_repair="ask user to confirm the visible state",
+                    source="v2_execute",
+                    independent=False,
+                    provenance=PROVENANCE_SELF_REPORTED,
+                )
+            else:
+                # "Nothing ran" is directly readable from state populated by
+                # the execution bridge's own control flow (not a self-report
+                # from an actor we're choosing to trust) -- provable, not
+                # asserted, so this is the one case that earns "independent".
+                result = EvaVerificationResult(
+                    action_id=state.task_id,
+                    verified=True,
+                    confidence=0.9,
+                    evidence="Execution was safely refused before any tool ran.",
+                    source="v2_execute",
+                    independent=True,
+                    provenance=PROVENANCE_INDEPENDENT,
+                )
         elif state.execution_summary:
-            result = EvaVerificationResult(
-                action_id=state.task_id,
-                verified=True,
-                confidence=0.76,
-                evidence="Allowlisted execution produced a clean result summary.",
-                source="v2_execute",
-            )
+            # Phase 69: this used to claim verified=True, confidence 0.76 from
+            # nothing more than "execution_summary is a non-empty string" --
+            # the exact self-report-laundering defect Phase 64 fixed in
+            # tools/postconditions.py, live here in the v2_execute runtime
+            # path. Concretely wrong for _run_browser_open_action
+            # (execution_bridge.py): a FAILED browser open still populates
+            # execution_summary with a non-empty message (it uses
+            # _clean_result_message with a fallback string regardless of
+            # `ok`), so a failed open was being reported verified=True. The
+            # honest signal available is executed_actions[-1]["status"],
+            # which every execution_bridge branch already sets to "executed"
+            # only on genuine self-reported success ("attempted_unverified"/
+            # "unavailable" otherwise) -- still only a self-report (nothing
+            # here independently re-checks OS/file state for these v2
+            # execution paths), so this stays PROVENANCE_SELF_REPORTED either
+            # way, at the same confidence tools/postconditions.py uses for a
+            # self-reported command_result_success (0.6/0.3), not a flat 0.76
+            # regardless of outcome.
+            last_action = state.executed_actions[-1] if state.executed_actions else None
+            self_reported_ok = True
+            if isinstance(last_action, dict) and "status" in last_action:
+                self_reported_ok = last_action.get("status") == "executed"
+            if self_reported_ok:
+                result = EvaVerificationResult(
+                    action_id=state.task_id,
+                    verified=True,
+                    confidence=0.6,
+                    evidence=f"Execution bridge self-reported success: {state.execution_summary}",
+                    source="v2_execute",
+                    independent=False,
+                    provenance=PROVENANCE_SELF_REPORTED,
+                )
+            else:
+                result = EvaVerificationResult(
+                    action_id=state.task_id,
+                    verified=False,
+                    confidence=0.3,
+                    evidence=f"Execution bridge reported an unverified/failed attempt: {state.execution_summary}",
+                    failure_reason="self_reported_failure",
+                    suggested_repair="ask user to confirm the visible state",
+                    source="v2_execute",
+                    independent=False,
+                    provenance=PROVENANCE_SELF_REPORTED,
+                )
         else:
             result = EvaVerificationResult(
                 action_id=state.task_id,

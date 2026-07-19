@@ -4,6 +4,7 @@ from dataclasses import asdict, field
 from typing import Any
 
 from .modeling import schema_dataclass
+from ..tools.postconditions import PROVENANCE_UNVERIFIED
 
 
 @schema_dataclass
@@ -42,6 +43,13 @@ class EvaVerificationResult:
     failure_reason: str | None = None
     suggested_repair: str | None = None
     source: str = "no_verification_available"
+    # Phase 69: same provenance contract as
+    # agent.action_model.VerificationResult / tools.postconditions
+    # .PostConditionResult -- how much this actually knows, not just whether
+    # it claims success. Default "unverified" so existing constructor calls
+    # (which predate this field) don't silently claim more than they checked.
+    independent: bool = False
+    provenance: str = PROVENANCE_UNVERIFIED
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
