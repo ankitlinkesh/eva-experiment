@@ -105,6 +105,7 @@ FULL_VERIFIERS = [
     "verify_eva_phase63_live_fixes.py",
     "verify_eva_phase64_honest_effects.py",
     "verify_eva_phase65_content_args.py",
+    "verify_eva_phase66_tool_reachability.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -185,6 +186,7 @@ QUICK_VERIFIERS = [
     "verify_eva_phase63_live_fixes.py",
     "verify_eva_phase64_honest_effects.py",
     "verify_eva_phase65_content_args.py",
+    "verify_eva_phase66_tool_reachability.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -229,6 +231,7 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_phase63_live_fixes.py": ("phase63", "screen", "live-fixes"),
     "verify_eva_phase64_honest_effects.py": ("phase64", "agent", "honest-effects"),
     "verify_eva_phase65_content_args.py": ("phase65", "permissions", "content-args"),
+    "verify_eva_phase66_tool_reachability.py": ("phase66", "tools", "reachability"),
 }
 
 
