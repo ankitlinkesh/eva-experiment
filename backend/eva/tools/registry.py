@@ -109,6 +109,20 @@ class ToolSpec:
     # execution (see _create_gated_pending). Empty by default: no behavior
     # change for tools that don't declare any.
     sensitive_args: tuple[str, ...] = ()
+    # Phase 65: argument names that are pure CONTENT -- the tool stores,
+    # displays, or logs the value but never dereferences it (never opens it,
+    # resolves it, or uses it to select a target). Phase 55's risk escalation
+    # (see permissions/risk_signals.py) skips these keys when scanning for a
+    # sensitive target, so a message body that happens to mention a system
+    # path (e.g. "I saved it under C:/Windows/System32/...") does not get
+    # scanned as if the path were the thing being acted on. Declare an
+    # argument here ONLY after reading the handler's implementation and
+    # confirming it never dereferences the value -- an argument's NAME is not
+    # proof (see message_tools.py::message_prepare vs. debugger.py's
+    # `traceback`, which parses and reads file paths out of the text despite
+    # "looking like" free-form content). Empty by default; this can only
+    # REDUCE friction, so under-declaring is always the safe direction.
+    content_args: tuple[str, ...] = ()
 
     @property
     def safe_by_default(self) -> bool:
@@ -333,6 +347,11 @@ class ToolRegistry:
                 action_type="SAFE_LOCAL_UI",
                 risk_categories=("SAFE_LOCAL_UI",),
                 verification_method="screen_state_changed",
+                # Phase 65: `reason` is content, not a target -- screen_tools.py
+                # ::screen_click only checks it is non-empty (reason_required),
+                # then logs it; `label` is deliberately NOT declared here, since
+                # it feeds grounding.resolve() as an actual target selector.
+                content_args=("reason",),
             ),
             "screen.type_text": ToolSpec(
                 name="screen.type_text",
@@ -386,6 +405,11 @@ class ToolRegistry:
                 action_type="SAFE_LOCAL_UI",
                 risk_categories=("SAFE_LOCAL_UI",),
                 verification_method="screen_state_changed",
+                # Phase 65: `reason` is content, not a target. screen_controller.py
+                # ::scroll only interpolates it into a log/summary string
+                # (f"Scrolled for reason: {reason}."); it is never opened,
+                # resolved, or used to pick a target.
+                content_args=("reason",),
             ),
             "screen.wait": ToolSpec(
                 name="screen.wait",
@@ -398,6 +422,10 @@ class ToolRegistry:
                 action_type="SAFE_LOCAL_UI",
                 risk_categories=("SAFE_LOCAL_UI",),
                 verification_method="command_result_success",
+                # Phase 65: same proof as screen.scroll above -- screen_controller.py
+                # ::wait only interpolates `reason` into a summary string, never
+                # dereferences it.
+                content_args=("reason",),
             ),
             "screen.submit_form": ToolSpec(
                 name="screen.submit_form",
@@ -571,6 +599,15 @@ class ToolRegistry:
                 action_type="SAFE_LOCAL_UI",
                 risk_categories=("SAFE_LOCAL_UI",),
                 verification_method="message_draft_prepared",
+                # Phase 65: `message` is the draft BODY -- pure content.
+                # message_tools.py::message_prepare stores it into the _DRAFTS
+                # dict and returns it; it is never opened, resolved, or used to
+                # select a target. This is the case that motivated the phase: a
+                # draft whose text merely MENTIONED a system path escalated
+                # allow -> override, the heaviest tier, for writing a sentence.
+                # `recipient` is deliberately NOT declared -- it is the key the
+                # draft is filed under, i.e. an actual target.
+                content_args=("message",),
             ),
             "message.confirm_send": ToolSpec(
                 name="message.confirm_send",
@@ -1324,6 +1361,12 @@ class ToolRegistry:
                 args_schema=_schema({"topic": {"type": "string"}, "note": {"type": "string"}, "tags": {"type": "string"}}, ["topic", "note"]),
                 safety_level="safe",
                 handler=lambda topic, note, tags="": research_save_note(str(topic), str(note), str(tags or "")),
+                # Phase 65: `note` and `tags` are content -- research/store.py
+                # ::save_note passes both through _clean_text() straight into a
+                # SQLite INSERT. Neither is ever dereferenced. `topic` is NOT
+                # declared: it goes to get_or_create_topic() as a lookup key,
+                # which is target-shaped.
+                content_args=("note", "tags"),
             ),
             "research_recall": ToolSpec(
                 name="research_recall",
@@ -1497,7 +1540,13 @@ class ToolRegistry:
         # The `confirmed`/`_approved` flags carry no authority. Approval only
         # ever comes from a ledger-confirmed pending action via run_approved().
         # Strip them so a planner LLM or HTTP client cannot self-approve.
-        call_args = {key: value for key, value in kwargs.items() if key not in {"confirmed", "_approved"}}
+        # `content_args` is stripped for the identical reason (Phase 65): it
+        # is a friction-REDUCING signal, so it must come only from the
+        # ToolSpec declared in source, never from a caller-supplied argument
+        # -- otherwise it becomes a self-authorization channel exactly like
+        # `confirmed`/`_approved`. See assess_friction() below, which is
+        # always passed spec.content_args, never anything from kwargs.
+        call_args = {key: value for key, value in kwargs.items() if key not in {"confirmed", "_approved", "content_args"}}
 
         decision = tool_gate.classify_tool_call(spec)
         # Flight recorder: record the gate's classification. Inert (no-op, no
@@ -1520,6 +1569,7 @@ class ToolRegistry:
             base_decision=decision,
             action_type=str(getattr(spec, "action_type", "") or ""),
             args=call_args,
+            content_args=tuple(getattr(spec, "content_args", ()) or ()),
         )
         if friction.escalated:
             decision = friction.decision

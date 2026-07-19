@@ -13,7 +13,12 @@ _DRAFTS: dict[str, dict[str, str]] = {}
 def message_prepare(recipient: str, message: str) -> dict[str, Any]:
     key = recipient.strip().lower() or "current"
     _DRAFTS[key] = {"recipient": recipient, "message": message}
-    return {"ok": True, "recipient": recipient, "message": message, "draft_prepared": True, "verification": {"verified": True, "confidence": 0.8}}
+    # Phase 65: this used to also return a hardcoded
+    # "verification": {"verified": True, "confidence": 0.8} for merely
+    # stashing a dict in memory -- nothing was verified, the third instance
+    # of the laundering pattern Phase 64 cleaned up elsewhere. draft_prepared
+    # is the accurate, sufficient claim: the draft really is stored.
+    return {"ok": True, "recipient": recipient, "message": message, "draft_prepared": True}
 
 
 def message_confirm_send(recipient: str, message: str) -> dict[str, Any]:

@@ -108,15 +108,27 @@ def is_sensitive_target(value: object) -> bool:
     return any(marker in text for marker in _SENSITIVE_MARKERS)
 
 
-def _sensitive_targets(args: dict[str, object] | None) -> list[str]:
+def _sensitive_targets(args: dict[str, object] | None, content_args: frozenset[str] = frozenset()) -> list[str]:
     """Every argument value that names a sensitive target.
 
     Scans conventional path arguments by name, plus any other string value that
     looks like a path (contains a separator) — so a sensitive path smuggled
     through an oddly named argument is still caught, without flagging prose.
+
+    Phase 65: keys listed in ``content_args`` are skipped entirely. Those are
+    argument names the tool's *implementation* provably never dereferences
+    (e.g. a message body that only gets stored/logged) — scanning them was a
+    category error: it tested a value the tool never acts on, so a message
+    that merely MENTIONS a system path (prose) tripped the same escalation as
+    an action that actually TARGETS one.
     """
     hits: list[str] = []
     for key, value in (args or {}).items():
+        # Defense in depth: a conventional path-argument NAME is never exempt,
+        # even if a ToolSpec mistakenly declared it as content (the audit
+        # verifier also forbids this statically; this is the runtime backstop).
+        if str(key) in content_args and str(key).lower() not in _PATH_ARG_KEYS:
+            continue
         if not isinstance(value, str):
             continue
         looks_pathy = str(key).lower() in _PATH_ARG_KEYS or "/" in value or "\\" in value
@@ -138,10 +150,27 @@ def _sensitive_floor(action_type: str, base_decision: str) -> str | None:
     return None
 
 
-def assess_friction(*, base_decision: str, action_type: str, args: dict[str, object] | None) -> FrictionAssessment:
+def assess_friction(
+    *,
+    base_decision: str,
+    action_type: str,
+    args: dict[str, object] | None,
+    content_args: tuple[str, ...] = (),
+) -> FrictionAssessment:
     """Escalate ``base_decision`` when the call's arguments reveal a risk the
     static tool class cannot see. Never lowers friction; never touches
-    ``hard_block``."""
+    ``hard_block``.
+
+    ``content_args`` (Phase 65) names argument keys the tool provably never
+    dereferences (e.g. a message body it only stores) -- those are excluded
+    from the sensitive-target scan so prose that merely MENTIONS a path does
+    not get treated as if it targeted one. It must come from the ToolSpec in
+    source (see registry.py::ToolRegistry.run, which passes
+    ``spec.content_args`` and strips any caller-supplied ``content_args`` kwarg
+    first) -- never from the call's own arguments, or it would be a
+    self-authorization channel that LOWERS friction, which nothing in this
+    module is allowed to do based on caller input.
+    """
     base = base_decision if base_decision in _FRICTION_ORDER else "confirm"
     if base == "hard_block":
         return FrictionAssessment(base, False, (), "hard_block is terminal; no escalation.")
@@ -149,9 +178,10 @@ def assess_friction(*, base_decision: str, action_type: str, args: dict[str, obj
     action = str(action_type or "")
     level = _FRICTION_ORDER[base]
     signals: list[str] = []
+    content_keys = frozenset(content_args or ())
 
     if action in _TARGET_ACTING_ACTION_TYPES or base in {"confirm", "override"}:
-        hits = _sensitive_targets(args)
+        hits = _sensitive_targets(args, content_keys)
         if hits:
             floor = _sensitive_floor(action, base)
             if floor is not None:
