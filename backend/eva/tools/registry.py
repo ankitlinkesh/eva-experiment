@@ -206,6 +206,28 @@ def _status() -> dict[str, Any]:
     return asdict(system_status())
 
 
+def _run_bounded_command(command: str, args: list[str] | tuple[str, ...] | None = None, timeout: int | None = None) -> dict[str, Any]:
+    """Phase 74. All policy lives in bounded_runner.validate, which is pure and
+    exhaustively tested; this is only the registry seam."""
+    from ..shell.bounded_runner import run_bounded
+
+    result = run_bounded(command, tuple(args or ()), timeout=timeout)
+    return {
+        "ok": result.ok,
+        "refused": result.refused,
+        "command": result.command,
+        "args": list(result.args),
+        "exit_code": result.exit_code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "truncated": result.truncated,
+        "timed_out": result.timed_out,
+        "error": result.error,
+        "untrusted": True,
+        "text": result.as_text(),
+    }
+
+
 def _media_control(action: str) -> str:
     normalized = action.strip().lower().replace(" ", "_")
     if normalized not in MEDIA_ACTIONS:
@@ -266,6 +288,23 @@ class ToolRegistry:
                 args_schema=_schema({}),
                 safety_level="safe",
                 handler=_status,
+            ),
+            # Phase 74. Deliberately NOT SHELL_ACTION: that action type is
+            # hard-blocked in both gates and stays that way. This runs a fixed
+            # allowlisted executable with shell=False and a read-only
+            # subcommand list, so it is not arbitrary shell execution. It is
+            # classified SYSTEM_CHANGE (override-class) anyway -- the heaviest
+            # non-blocked tier -- because a first release of process execution
+            # should cost more than it probably needs to, not less.
+            "shell.run_bounded": ToolSpec(
+                name="shell.run_bounded",
+                description="Run one allowlisted read-only command (git status/log/diff, python --version, pip list) with no shell.",
+                args_schema=_schema({"command": "str", "args": "list[str]"}),
+                safety_level="dangerous",
+                handler=_run_bounded_command,
+                action_type="SYSTEM_CHANGE",
+                risk_categories=("SYSTEM_CHANGE",),
+                category="system",
             ),
             "open_app": ToolSpec(
                 name="open_app",

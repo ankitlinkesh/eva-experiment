@@ -104,4 +104,13 @@ def test_relabelling_is_gate_preserving(registry):
     # tool -- a search for the deleted names could not find it. Counts-only
     # pins are invisible to name-based impact analysis; the same was true of
     # EXPECTED_TOOL_COUNT in the Phase 66 verifier.
-    assert counts == {"allow": 83, "override": 9, "confirm": 8}, f"gate class counts drifted: {counts}"
+    #
+    # Phase 74 added exactly one tool, `shell.run_bounded` (SYSTEM_CHANGE,
+    # safety_level dangerous), so override rises 9 -> 10 while allow and
+    # confirm are unchanged. The movement is toward MORE friction, which is the
+    # direction this test permits: it exists to catch a surviving tool sliding
+    # into a WEAKER class, not to freeze the totals. Note the pin fired exactly
+    # as intended and demanded a justification here rather than in a commit
+    # message alone -- which is the whole reason a counts-only pin earns its
+    # keep despite being invisible to name-based searching.
+    assert counts == {"allow": 83, "override": 10, "confirm": 8}, f"gate class counts drifted: {counts}"

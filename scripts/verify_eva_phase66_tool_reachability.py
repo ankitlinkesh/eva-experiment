@@ -226,7 +226,7 @@ EXCLUDED_FILES = (REGISTRY_FILE, CATALOG_FILE)
 # Ground truth measured directly against the registry. A drift in either
 # number means tools were added/removed or the planner surface changed --
 # either is fine, but it must be a deliberate, reviewed edit to this file.
-EXPECTED_TOOL_COUNT = 100
+EXPECTED_TOOL_COUNT = 101
 EXPECTED_DEFAULT_PLANNER_VISIBLE_COUNT = 72
 EXPECTED_PLAYWRIGHT_PLANNER_VISIBLE_COUNT = 79
 

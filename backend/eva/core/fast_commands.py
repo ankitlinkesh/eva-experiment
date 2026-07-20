@@ -7,6 +7,7 @@ from ..diagnostics.health import get_eva_health_summary
 from ..diagnostics.providers import format_llm_status
 from .fast_command_ask import _authority_decision_from_natural_route, _handle_eva_ask_command
 from .fast_command_delegation import _handle_delegation_command
+from .fast_command_shell import _handle_shell_command
 from .fast_command_formatters import (
     _format_activation_status,
     _format_agent_status,
@@ -706,6 +707,12 @@ def maybe_handle_fast_command(
     delegation = _handle_delegation_command(normalized, original, tools, session_context, memory, session_id)
     if delegation:
         return delegation
+
+    # Phase 74 bounded command runner. `$ ` cannot occur in ordinary prose, so
+    # this cannot start swallowing requests meant for the LLM.
+    shell = _handle_shell_command(normalized, original, tools, session_context, memory, session_id)
+    if shell:
+        return shell
 
     if normalized in {
         "eva browser read status",
