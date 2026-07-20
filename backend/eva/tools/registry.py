@@ -1507,7 +1507,51 @@ class ToolRegistry:
         # -- otherwise it becomes a self-authorization channel exactly like
         # `confirmed`/`_approved`. See assess_friction() below, which is
         # always passed spec.content_args, never anything from kwargs.
-        call_args = {key: value for key, value in kwargs.items() if key not in {"confirmed", "_approved", "content_args"}}
+        # `role`/`_role`/`agent_role` are stripped for the same reason: the
+        # active role CONSTRAINS what may be called, so a caller that could
+        # name its own role would simply claim whichever role unlocks the tool
+        # it wants. The role is ambient, set by the delegation boundary in
+        # source (agents/role_context.role_scope), never taken from arguments.
+        from ..agents.role_context import ROLE_KWARG_NAMES, active_role
+
+        call_args = {
+            key: value
+            for key, value in kwargs.items()
+            if key not in ({"confirmed", "_approved", "content_args"} | ROLE_KWARG_NAMES)
+        }
+
+        # Phase 72 role containment. Only applies INSIDE a delegated sub-task;
+        # with no active role this block is a single None check and ordinary
+        # console/planner behavior is unchanged.
+        role = active_role()
+        if role is not None:
+            from ..agents.role_policy import RoleTier, tier_for
+            from ..observability.context import trace_gate_decision
+
+            role_tier = tier_for(role, name)
+            if role_tier is RoleTier.RED:
+                trace_gate_decision(name, "role_denied", spec)
+                # Deliberately reports the ROLE and the TOOL only. The arguments
+                # are not echoed: a refusal triggered by injected content must
+                # not become a channel for relaying that content to the user
+                # (the Phase 68 lesson behind confirmation.py's explicit key
+                # list, where a result can carry page text or a decrypted value).
+                return {
+                    "ok": False,
+                    "role_denied": True,
+                    "role": role,
+                    "tool": name,
+                    "injection_signal": True,
+                    "message": (
+                        f"Refused: the `{role}` sub-task may not call `{name}`. "
+                        f"This restriction is fixed in source and cannot be granted at runtime. "
+                        f"If you did not ask for this, treat it as a signal — content this sub-task "
+                        f"read may have tried to make it act. Run `{name}` yourself from the console "
+                        f"if you intended it."
+                    ),
+                }
+        else:
+            role_tier = None
 
         decision = tool_gate.classify_tool_call(spec)
         # Flight recorder: record the gate's classification. Inert (no-op, no
@@ -1555,6 +1599,19 @@ class ToolRegistry:
                 if calibrated.auto_allowed:
                     decision = "allow"
                     trace_gate_decision(name, "trusted_auto_allow", spec)
+
+        # Phase 72 ORANGE: raise friction one step for a tool this role may use
+        # but should never use unattended. Applied LAST, after the Phase 42
+        # de-escalation, so it strictly dominates: a role-escalated action can
+        # never be handed back to trust calibration and auto-allowed. Like
+        # Phase 55 this only ever raises, so it is unconditional and fails safe.
+        if role_tier is not None and role_tier is RoleTier.ORANGE:
+            from ..agents.role_policy import escalate_one_step
+
+            escalated = escalate_one_step(decision)
+            if escalated != decision:
+                decision = escalated
+                trace_gate_decision(name, "role_escalated", spec)
 
         if decision == "hard_block":
             return {
