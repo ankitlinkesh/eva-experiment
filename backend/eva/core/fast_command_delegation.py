@@ -62,18 +62,31 @@ def _handle_delegation_command(
     if role_query and normalized.startswith("role "):
         return describe_role(role_query.strip()), "fast-command"
 
-    request = _after_prefix(original, ("delegate ",))
-    if not request:
+    # Everything after the word "delegate" (may begin with ":" or a space, or be
+    # empty). Handled here rather than via _after_prefix so that "delegate: goal"
+    # (advisor, no space after the word) is recognised alongside "delegate goal".
+    if normalized != "delegate" and not normalized.startswith(("delegate:", "delegate ")):
         return None
+    remainder = original.strip()[len("delegate"):]
+    role, separator, goal = remainder.partition(":")
+    role = role.strip()
+    goal = goal.strip()
 
-    role, separator, goal = request.partition(":")
+    # Phase 79 role advisor: no explicit role means "suggest one". `delegate:
+    # <goal>` (empty role before the colon) or `delegate <goal>` (no colon) asks
+    # the specialists which role fits and which skills it can run, then prints
+    # the exact command -- it never spawns a sub-task, so the person still picks
+    # the role and confirms (the Phase 73 trust boundary). A bare `delegate`
+    # lists the roles.
+    if role == "":
+        if not separator and not goal:
+            return _format_roles(), "fast-command"
+        return _advise(goal), "fast-command"
     if not separator:
-        return (
-            "Usage: delegate <role>: <goal>\n\n"
-            f"Known roles: {', '.join(known_roles())}.\n"
-            "Example: delegate research: summarize this week's LLM pricing changes",
-            "fast-command",
-        )
+        # `delegate <text>` with no colon and text that is not a bare role: treat
+        # the text as a goal to advise on. (A known role with no goal falls through
+        # to the advisor too, which will simply recommend that same role.)
+        return _advise(role), "fast-command"
 
     context = {
         "registry": tools,
@@ -81,5 +94,11 @@ def _handle_delegation_command(
         "session_id": session_id,
         "session_context": session_context,
     }
-    result = run_async(run_delegated(role.strip(), goal.strip(), context))
+    result = run_async(run_delegated(role, goal, context))
     return result.as_text(), "fast-command"
+
+
+def _advise(goal: str) -> str:
+    from ..agents.role_advisor import advise
+
+    return advise(goal).as_text()
