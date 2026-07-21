@@ -117,6 +117,7 @@ FULL_VERIFIERS = [
     "verify_eva_phase79_role_advisor.py",
     "verify_eva_phase80_gate_agreement.py",
     "verify_eva_phase81_vault_diagnostics.py",
+    "verify_eva_phase82_close_app_friction.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -209,6 +210,7 @@ QUICK_VERIFIERS = [
     "verify_eva_phase79_role_advisor.py",
     "verify_eva_phase80_gate_agreement.py",
     "verify_eva_phase81_vault_diagnostics.py",
+    "verify_eva_phase82_close_app_friction.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -265,6 +267,7 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_phase79_role_advisor.py": ("phase79", "agents", "delegation", "role-advisor", "skills"),
     "verify_eva_phase80_gate_agreement.py": ("phase80", "security", "gate", "classifier-agreement", "no-drift"),
     "verify_eva_phase81_vault_diagnostics.py": ("phase81", "vault", "dpapi", "error-swallow-audit", "diagnosability"),
+    "verify_eva_phase82_close_app_friction.py": ("phase82", "security", "close-app", "friction", "desktop"),
 }
 
 

@@ -3371,6 +3371,14 @@ def maybe_handle_fast_command(
 
     close_target = _after_prefix(normalized, ("close ", "quit ", "kill app ", "exit app "))
     if close_target:
+        # Phase 82: refuse a non-allowlisted app up front, so an unknown/system
+        # app is not asked to be confirmed only to be rejected on execution (the
+        # Phase 74 lesson). An allowlisted close goes through the gate, which now
+        # asks for confirmation because it can discard unsaved work.
+        from ..tools.desktop import close_app_refusal, is_closeable
+
+        if not is_closeable(close_target):
+            return close_app_refusal(close_target), "fast-command"
         return _run_tool(tools, "close_app", session_context, app_name=close_target)
 
     folder = _after_prefix(normalized, ("open folder ", "show folder ", "open my ", "show my "))

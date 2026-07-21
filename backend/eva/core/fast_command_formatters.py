@@ -729,6 +729,12 @@ def _looks_like_personal_profile_query(text: str) -> bool:
 def _run_tool(tools: ToolRegistry, name: str, session_context: dict | None = None, **kwargs: object) -> tuple[str, str]:
     try:
         result = tools.run(name, **kwargs)
+        # A gated tool that needs approval (Phase 82: close_app is now confirm-
+        # class, since closing an app can discard unsaved work) returns a pending
+        # dict rather than a result. Surface its confirmation message instead of
+        # letting it fall through to the raw str(result) below.
+        if isinstance(result, dict) and result.get("requires_confirmation"):
+            return str(result.get("message") or result.get("explanation") or "This needs your confirmation first."), "desktop-tool"
         if name in {"open_app", "open_folder", "open_url"}:
             target = str(kwargs.get("app") or kwargs.get("app_name") or kwargs.get("folder") or kwargs.get("folder_name") or kwargs.get("url") or "")
             try:

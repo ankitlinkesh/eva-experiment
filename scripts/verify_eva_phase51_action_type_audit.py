@@ -62,7 +62,10 @@ def check(value: object, message: str) -> None:
 # safety_level dangerous), taking override 9 -> 10 with allow and confirm
 # unchanged. The movement is toward MORE friction, the direction this pin
 # allows; it guards against a surviving tool sliding into a weaker class.
-EXPECTED_CLASS_COUNTS = {"allow": 83, "override": 10, "confirm": 8}
+# Phase 82 moved close_app from allow -> confirm (requires_confirmation=True):
+# closing an app can discard unsaved work, so it now asks first. allow 83->82,
+# confirm 8->9.
+EXPECTED_CLASS_COUNTS = {"allow": 82, "override": 10, "confirm": 9}
 
 SCREEN_CAPTURE_TOOLS = ("capture_screen", "analyze_screen", "screen.observe")
 

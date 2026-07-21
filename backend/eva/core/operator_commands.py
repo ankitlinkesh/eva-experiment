@@ -363,6 +363,12 @@ def handle_operator_command(message: str, context: dict[str, Any] | None = None)
     if text.startswith("close "):
         target = _after_prefix(text, ("close ", "quit "))
         if target:
+            # Phase 82: refuse a non-allowlisted app before the gate, so it is
+            # not confirmed only to be rejected on execution (Phase 74 lesson).
+            from ..tools.desktop import close_app_refusal, is_closeable
+
+            if not is_closeable(target):
+                return _handled(tool="close_app", args={"app": target}, response=close_app_refusal(target), result=None)
             return _execute(executor, "close_app", {"app": target}, session_context)
 
     app = _after_prefix(text, ("open app ", "launch app ", "start app ", "open ", "launch ", "start "))

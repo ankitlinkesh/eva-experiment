@@ -61,10 +61,10 @@ What this verifies (all against the real registry/gate, fully offline):
      auto-expose a tool to the planner) -- it is trusted-console-only.
   10. The vault's only plaintext egress is ``Vault.resolve()``; no
       show/dump/export/reveal-shaped method exists anywhere on it.
-  11. Phase 51's audited gate-class counts (``EXPECTED_CLASS_COUNTS``) already
-      say ``confirm == 8`` for exactly this reason (``screen.submit_form`` is
-      the 8th); this file imports that verifier's module and cross-checks the
-      number so the two files cannot silently drift apart.
+  11. Phase 51's audited gate-class counts (``EXPECTED_CLASS_COUNTS``) say
+      ``confirm == 9`` (Phase 82 added ``close_app`` as confirm-class); this
+      file imports that verifier's module and cross-checks the number so the
+      two files cannot silently drift apart.
   12. Source property: ``stage_form`` -- the console-only entry point into
       staging -- is called from exactly one production module,
       ``backend/eva/core/fast_commands.py``. This cannot be checked by
@@ -353,13 +353,14 @@ def _run() -> int:
         )
 
     # 11. Cross-check against Phase 51's audited gate-class counts so the two
-    # files cannot silently drift: confirm == 8 counts screen.submit_form as
-    # the newest confirm-class tool.
+    # files cannot silently drift. confirm == 9 as of Phase 82, which moved
+    # close_app from allow to confirm (it can discard unsaved work);
+    # screen.submit_form remains among the confirm-class tools.
     check(
-        phase51.EXPECTED_CLASS_COUNTS["confirm"] == 8,
-        "Phase 51's EXPECTED_CLASS_COUNTS['confirm'] must be 8 (screen.submit_form is the 8th confirm-class "
-        f"tool); got {phase51.EXPECTED_CLASS_COUNTS.get('confirm')}. If this genuinely changed, update BOTH "
-        "verifiers together and say why.",
+        phase51.EXPECTED_CLASS_COUNTS["confirm"] == 9,
+        "Phase 51's EXPECTED_CLASS_COUNTS['confirm'] must be 9 (Phase 82 added close_app as confirm-class); "
+        f"got {phase51.EXPECTED_CLASS_COUNTS.get('confirm')}. If this genuinely changed, update the count pins "
+        "together and say why.",
     )
 
     # 12. Source property: stage_form is called from exactly one production

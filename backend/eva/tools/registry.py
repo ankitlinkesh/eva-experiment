@@ -332,6 +332,19 @@ class ToolRegistry:
                 description="Close a configurable safe allowlist of common apps. Never kills arbitrary or system processes.",
                 args_schema=_schema({"app": {"type": "string"}, "app_name": {"type": "string"}}, []),
                 safety_level="sensitive",
+                # Phase 82: close_app was allow-class (auto-run, zero friction)
+                # even though closing an app can DISCARD UNSAVED WORK -- unlike
+                # open_app, which is harmless. `safety_level="sensitive"` alone
+                # did nothing at the gate (only "dangerous"/"safe" are read), and
+                # the SYSTEM_CHANGE action_type of the deleted `app.close_request`
+                # was never carried over (see the note near message.prepare). It
+                # now asks first, matching screen.submit_form (also SAFE_LOCAL_UI
+                # but confirm-class because it can commit/lose data). A delegated
+                # desktop sub-task escalates this one step further to override
+                # (role_policy ORANGE), which is why it is confirm and not
+                # override on the direct path -- proportionate to closing an
+                # allowlisted user app rather than a destructive system change.
+                requires_confirmation=True,
                 handler=lambda app=None, app_name=None: close_app(str(app or app_name or "")),
             ),
             "open_folder": ToolSpec(

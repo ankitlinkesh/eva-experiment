@@ -113,4 +113,5 @@ def test_relabelling_is_gate_preserving(registry):
     # as intended and demanded a justification here rather than in a commit
     # message alone -- which is the whole reason a counts-only pin earns its
     # keep despite being invisible to name-based searching.
-    assert counts == {"allow": 83, "override": 10, "confirm": 8}, f"gate class counts drifted: {counts}"
+    # Phase 82: close_app moved allow -> confirm (it can discard unsaved work).
+    assert counts == {"allow": 82, "override": 10, "confirm": 9}, f"gate class counts drifted: {counts}"

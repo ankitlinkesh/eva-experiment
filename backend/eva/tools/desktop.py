@@ -181,6 +181,26 @@ def close_app_allowlist() -> tuple[str, ...]:
     return tuple(sorted(dict.fromkeys(allowed)))
 
 
+def is_closeable(app_name: str) -> bool:
+    """Whether ``close_app`` would accept this app -- a pure allowlist check with
+    no side effects (Phase 82). Used to refuse an unknown or system app BEFORE
+    the gate asks for confirmation, so a close that can only ever be refused is
+    not parked at the gate first (the Phase 74 lesson: never ask to confirm
+    something that will be rejected anyway)."""
+    key = _canonical_app(app_name)
+    if key in BLOCKED_CLOSE_APP_NAMES:
+        return False
+    if key not in set(close_app_allowlist()):
+        return False
+    return bool(CLOSE_APP_PROCESS_NAMES.get(key))
+
+
+def close_app_refusal(app_name: str) -> str:
+    """The standard refusal message for a non-closeable app."""
+    supported = ", ".join(close_app_allowlist()) or "none configured"
+    return f"I can close that if it is in the safe close allowlist. Supported: {supported}."
+
+
 def open_app(app_name: str) -> str:
     key = _canonical_app(app_name)
     if key not in APP_ALIASES:

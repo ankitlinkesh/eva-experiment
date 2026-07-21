@@ -119,9 +119,12 @@ def main() -> int:
                 calls=registry.calls,
             )
 
-        for case_name, message, expected_process in (
-            ("close_chrome_allowed", "close chrome", "chrome.exe"),
-            ("close_notepad_allowed", "close notepad", "notepad.exe"),
+        # Phase 82: closing an ALLOWLISTED app now asks first (it can discard
+        # unsaved work), so the operator surfaces a confirmation and does NOT
+        # kill until the user confirms.
+        for case_name, message in (
+            ("close_chrome_asks_first", "close chrome"),
+            ("close_notepad_asks_first", "close notepad"),
         ):
             registry.calls.clear()
             kill_calls.clear()
@@ -131,14 +134,16 @@ def main() -> int:
                 bool(
                     result
                     and result.get("tool") == "close_app"
-                    and result.get("result", {}).get("ok") is True
-                    and any(expected_process in call for call in kill_calls)
+                    and result.get("requires_confirmation") is True
+                    and not kill_calls
                 ),
                 result=result,
                 calls=registry.calls,
                 kill_calls=kill_calls,
             )
 
+        # A non-allowlisted or system app is refused BEFORE the gate (Phase 82 /
+        # Phase 74 lesson): it is not asked to be confirmed only to be rejected.
         for case_name, message in (
             ("close_unknown_refused", "close unknownapp"),
             ("close_system_refused", "close system process"),
@@ -151,7 +156,7 @@ def main() -> int:
                 bool(
                     result
                     and result.get("tool") == "close_app"
-                    and result.get("result", {}).get("ok") is False
+                    and not result.get("requires_confirmation")
                     and "safe close allowlist" in result.get("response", "")
                     and not kill_calls
                 ),
