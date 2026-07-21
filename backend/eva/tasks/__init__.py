@@ -38,8 +38,13 @@ def durable_queue_enabled(environ: dict[str, str] | None = None) -> bool:
     return env.get("EVA_DURABLE_QUEUE_ENABLED", "").strip().lower() not in _ABSENT
 
 
-def default_queue_path() -> Path:
-    return _DEFAULT_QUEUE_PATH
+def default_queue_path(environ: dict[str, str] | None = None) -> Path:
+    """The queue path: ``EVA_TASKS_PATH`` override, else the repo default.
+    Overridable like the vault so a test or second profile does not write into
+    the real queue (Phase 83)."""
+    env = environ if environ is not None else os.environ
+    override = env.get("EVA_TASKS_PATH", "").strip()
+    return Path(override) if override else _DEFAULT_QUEUE_PATH
 
 
 def open_default_queue(environ: dict[str, str] | None = None) -> DurableTaskQueue | None:
@@ -50,7 +55,7 @@ def open_default_queue(environ: dict[str, str] | None = None) -> DurableTaskQueu
     try:
         if not durable_queue_enabled(environ):
             return None
-        return DurableTaskQueue(_DEFAULT_QUEUE_PATH)
+        return DurableTaskQueue(default_queue_path(environ))
     except Exception:
         return None
 

@@ -39,8 +39,13 @@ def self_improvement_enabled(environ: dict[str, str] | None = None) -> bool:
     return env.get("EVA_SELF_IMPROVEMENT_ENABLED", "").strip().lower() not in _ABSENT
 
 
-def default_skills_path() -> Path:
-    return _DEFAULT_SKILLS_PATH
+def default_skills_path(environ: dict[str, str] | None = None) -> Path:
+    """The skill-store path: ``EVA_SKILLS_PATH`` override, else the repo default.
+    Overridable like the vault (``EVA_VAULT_PATH``) so a test or a second profile
+    does not write into the real store (Phase 83)."""
+    env = environ if environ is not None else os.environ
+    override = env.get("EVA_SKILLS_PATH", "").strip()
+    return Path(override) if override else _DEFAULT_SKILLS_PATH
 
 
 def open_default_store(environ: dict[str, str] | None = None) -> SkillStore | None:
@@ -48,7 +53,7 @@ def open_default_store(environ: dict[str, str] | None = None) -> SkillStore | No
     try:
         if not self_improvement_enabled(environ):
             return None
-        return SkillStore(_DEFAULT_SKILLS_PATH)
+        return SkillStore(default_skills_path(environ))
     except Exception:
         return None
 

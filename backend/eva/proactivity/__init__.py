@@ -38,8 +38,13 @@ def proactivity_enabled(environ: dict[str, str] | None = None) -> bool:
     return env.get("EVA_PROACTIVITY_ENABLED", "").strip().lower() not in _ABSENT
 
 
-def default_store_path() -> Path:
-    return _DEFAULT_STORE_PATH
+def default_store_path(environ: dict[str, str] | None = None) -> Path:
+    """The rules-store path: ``EVA_PROACTIVITY_PATH`` override, else the repo
+    default. Overridable like the vault so a test or second profile does not
+    write into the real store (Phase 83)."""
+    env = environ if environ is not None else os.environ
+    override = env.get("EVA_PROACTIVITY_PATH", "").strip()
+    return Path(override) if override else _DEFAULT_STORE_PATH
 
 
 def open_default_store(environ: dict[str, str] | None = None) -> ProactivityStore | None:
@@ -47,7 +52,7 @@ def open_default_store(environ: dict[str, str] | None = None) -> ProactivityStor
     try:
         if not proactivity_enabled(environ):
             return None
-        return ProactivityStore(_DEFAULT_STORE_PATH)
+        return ProactivityStore(default_store_path(environ))
     except Exception:
         return None
 
