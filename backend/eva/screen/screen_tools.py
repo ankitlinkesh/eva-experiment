@@ -300,6 +300,19 @@ def screen_submit_form(spec_id: str, reason: str) -> dict[str, Any]:
 
             value = vault.resolve(name) if name else None
             if value is None:
+                # Distinguish a genuinely absent secret from one that EXISTS but
+                # could not be decrypted (Phase 81). The latter -- most often a
+                # value saved under a different Windows account -- previously read
+                # as "not found" and sent the user to re-save a secret that was
+                # actually there, which DPAPI would still refuse.
+                reason = vault.last_resolve_error() if name else "not_found"
+                if reason and reason != "not_found":
+                    detail = (
+                        f"saved value '{name}' exists but could not be decrypted "
+                        "(it may have been saved under a different Windows account)"
+                    )
+                    steps.append(FillStep(label, "vault_undecryptable", secret, detail[:200]))
+                    return _stop(FillOutcome(steps, filled, False, f"{detail} for '{label}'"))
                 steps.append(FillStep(label, "vault_missing", secret, f"saved value '{name}' not found"))
                 return _stop(FillOutcome(steps, filled, False, f"no saved value named '{name}' for '{label}'"))
         else:

@@ -109,6 +109,18 @@ class Vault:
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        # Why the most recent resolve() returned None. resolve() keeps its "None
+        # on any failure" contract, but a caller can now tell a genuinely absent
+        # secret ("not_found") from one that EXISTS but could not be decrypted
+        # ("decrypt_failed:...", the different-Windows-account case) -- which
+        # otherwise looked identical and misled the user (Phase 81).
+        self._last_resolve_error: str | None = None
+
+    def last_resolve_error(self) -> str | None:
+        """Why the most recent resolve() returned None, or None on success.
+        Values: 'not_found', 'empty_entry', 'decode_failed', 'decrypt_failed:...',
+        'exception:...'. Diagnostic only; resolve()'s return is unchanged."""
+        return self._last_resolve_error
 
     @property
     def path(self) -> Path:
@@ -298,6 +310,7 @@ class Vault:
         A foreign/corrupt ciphertext degrades to None for that one entry;
         other entries remain resolvable.
         """
+        self._last_resolve_error = None
         try:
             key = _normalize_name(name)
             data = self._read_raw()
@@ -306,14 +319,25 @@ class Vault:
                     continue
                 encoded = raw.get("ciphertext")
                 if not encoded:
+                    self._last_resolve_error = "empty_entry"
                     return None
                 try:
                     ciphertext = base64.b64decode(str(encoded))
                 except Exception:
+                    self._last_resolve_error = "decode_failed"
                     return None
-                return dpapi.unprotect(ciphertext)
+                plaintext = dpapi.unprotect(ciphertext)
+                if plaintext is None:
+                    # The entry EXISTS but did not decrypt -- surface the dpapi
+                    # reason verbatim (most importantly a foreign-account blob,
+                    # 'decrypt_failed:winerr=...') rather than letting it read as
+                    # "not found".
+                    self._last_resolve_error = dpapi.last_error() or "decrypt_failed"
+                return plaintext
+            self._last_resolve_error = "not_found"
             return None
-        except Exception:
+        except Exception as exc:
+            self._last_resolve_error = f"exception:{type(exc).__name__}"
             return None
 
     def delete(self, name: str) -> bool:

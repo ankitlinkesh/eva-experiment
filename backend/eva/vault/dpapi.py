@@ -142,11 +142,32 @@ def protect(plaintext: str) -> bytes | None:
         return None
 
 
+# Why the last unprotect() failed, or None if it succeeded. The return contract
+# stays "None on failure" so callers are untouched, but the REASON is recorded
+# on the side (Phase 81). Without this, a decryption failure -- most importantly
+# a blob encrypted under a DIFFERENT Windows account, which CryptUnprotectData
+# rejects -- was indistinguishable from "no such secret", so a user on a second
+# account was told their saved value did not exist and sent to re-save it.
+_LAST_ERROR: str | None = None
+
+
+def last_error() -> str | None:
+    """Why the most recent unprotect() returned None (e.g. 'decrypt_failed:winerr=13',
+    'dpapi_unavailable', 'empty_blob'), or None if it succeeded. Diagnostic only."""
+    return _LAST_ERROR
+
+
 def unprotect(blob: bytes) -> str | None:
-    """Decrypt a DPAPI blob back to plaintext. Never raises; None on failure."""
+    """Decrypt a DPAPI blob back to plaintext. Never raises; None on failure.
+
+    Records why on failure in ``last_error()`` without changing the return.
+    """
+    global _LAST_ERROR
     if _LIBS is None:
+        _LAST_ERROR = "dpapi_unavailable"
         return None
     if not blob:
+        _LAST_ERROR = "empty_blob"
         return None
     crypt32, kernel32 = _LIBS
     try:
@@ -165,11 +186,21 @@ def unprotect(blob: bytes) -> str | None:
             ctypes.byref(blob_out),
         )
         if not ok:
+            # Capture the Windows error immediately -- a blob from another user
+            # account fails here with a specific code rather than an exception.
+            try:
+                winerr = int(kernel32.GetLastError())
+            except Exception:
+                winerr = 0
+            _LAST_ERROR = f"decrypt_failed:winerr={winerr}"
             return None
         raw = _take_and_free(kernel32, blob_out)
-        return raw.decode("utf-8")
-    except Exception:
+        result = raw.decode("utf-8")
+        _LAST_ERROR = None
+        return result
+    except Exception as exc:
+        _LAST_ERROR = f"exception:{type(exc).__name__}"
         return None
 
 
-__all__ = ["dpapi_available", "protect", "unprotect", "DATA_BLOB"]
+__all__ = ["dpapi_available", "protect", "unprotect", "last_error", "DATA_BLOB"]
