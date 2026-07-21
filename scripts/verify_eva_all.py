@@ -115,6 +115,7 @@ FULL_VERIFIERS = [
     "verify_eva_phase77_live_drive.py",
     "verify_eva_phase78_trust_eligibility_pin.py",
     "verify_eva_phase79_role_advisor.py",
+    "verify_eva_phase80_gate_agreement.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -205,6 +206,7 @@ QUICK_VERIFIERS = [
     "verify_eva_phase77_live_drive.py",
     "verify_eva_phase78_trust_eligibility_pin.py",
     "verify_eva_phase79_role_advisor.py",
+    "verify_eva_phase80_gate_agreement.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -259,6 +261,7 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_phase77_live_drive.py": ("phase77", "diagnostics", "live-drive", "no-silent-no-llm"),
     "verify_eva_phase78_trust_eligibility_pin.py": ("phase78", "permissions", "trust-policy", "risk-signals", "dominance"),
     "verify_eva_phase79_role_advisor.py": ("phase79", "agents", "delegation", "role-advisor", "skills"),
+    "verify_eva_phase80_gate_agreement.py": ("phase80", "security", "gate", "classifier-agreement", "no-drift"),
 }
 
 
