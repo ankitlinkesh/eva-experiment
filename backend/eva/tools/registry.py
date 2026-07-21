@@ -1759,12 +1759,31 @@ class ToolRegistry:
         # masked; execution must never see "[HIDDEN]" in place of a real value.
         tool_gate.register_pending_call(action.id, name, args)
         phrase = f"confirm override {action.id}" if requires_override else f"confirm {action.id}"
+        # Phase 75: the deterministic half of the explanation ships with every
+        # approval prompt. It is assembled from source of truth (the spec's own
+        # description and declared action_type) with no model involved, so it
+        # costs nothing, cannot fail, and cannot be talked into saying something
+        # false. `safe_args` is the masked form -- an explanation must never be
+        # the thing that prints a password the ledger was careful to hide.
+        from ..agents.explainer import explain_action
+
+        explanation = explain_action(
+            tool=name,
+            description=spec.description,
+            action_type=str(spec.action_type),
+            decision=decision,
+            args=safe_args,
+        )
         return {
             "ok": False,
             "requires_confirmation": True,
             "pending_id": action.id,
             "risk_class": decision,
-            "message": f"{name} needs approval before it runs. Say `{phrase}` to approve this exact action.",
+            "explanation": explanation.as_text(),
+            "message": (
+                f"{explanation.as_text()}\n\n"
+                f"Say `{phrase}` to approve this exact action, or `explain {action.id}` for more."
+            ),
         }
 
     def _public_spec(self, spec: ToolSpec) -> dict[str, Any]:

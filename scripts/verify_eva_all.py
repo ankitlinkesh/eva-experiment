@@ -110,6 +110,7 @@ FULL_VERIFIERS = [
     "verify_eva_phase72_role_policy.py",
     "verify_eva_phase73_delegation.py",
     "verify_eva_phase74_bounded_runner.py",
+    "verify_eva_phase75_explainer.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -195,6 +196,7 @@ QUICK_VERIFIERS = [
     "verify_eva_phase72_role_policy.py",
     "verify_eva_phase73_delegation.py",
     "verify_eva_phase74_bounded_runner.py",
+    "verify_eva_phase75_explainer.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -244,6 +246,7 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_phase72_role_policy.py": ("phase72", "agents", "permissions", "role-policy", "containment"),
     "verify_eva_phase73_delegation.py": ("phase73", "agents", "delegation", "sub-tasks"),
     "verify_eva_phase74_bounded_runner.py": ("phase74", "shell", "bounded-commands", "no-shell"),
+    "verify_eva_phase75_explainer.py": ("phase75", "agents", "explainer", "approval-legibility"),
 }
 
 

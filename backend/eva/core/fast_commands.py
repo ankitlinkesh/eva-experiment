@@ -7,6 +7,7 @@ from ..diagnostics.health import get_eva_health_summary
 from ..diagnostics.providers import format_llm_status
 from .fast_command_ask import _authority_decision_from_natural_route, _handle_eva_ask_command
 from .fast_command_delegation import _handle_delegation_command
+from .fast_command_explain import _handle_explain_command
 from .fast_command_shell import _handle_shell_command
 from .fast_command_formatters import (
     _format_activation_status,
@@ -713,6 +714,13 @@ def maybe_handle_fast_command(
     shell = _handle_shell_command(normalized, original, tools, session_context, memory, session_id)
     if shell:
         return shell
+
+    # Phase 75. Claims `explain` ONLY for a pending-action id (or bare, when a
+    # pending action exists), so the later `explain feature ...` and
+    # `explain project architecture` branches keep their meaning.
+    explained = _handle_explain_command(normalized, original, tools, session_context, memory, session_id)
+    if explained:
+        return explained
 
     if normalized in {
         "eva browser read status",
