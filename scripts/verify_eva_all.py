@@ -121,6 +121,7 @@ FULL_VERIFIERS = [
     "verify_eva_phase83_store_path_overrides.py",
     "verify_eva_phase84_gemini_free_tier.py",
     "verify_eva_phase85_confirm_output.py",
+    "verify_eva_phase86_gate_execution.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -217,6 +218,7 @@ QUICK_VERIFIERS = [
     "verify_eva_phase83_store_path_overrides.py",
     "verify_eva_phase84_gemini_free_tier.py",
     "verify_eva_phase85_confirm_output.py",
+    "verify_eva_phase86_gate_execution.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -277,6 +279,7 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_phase83_store_path_overrides.py": ("phase83", "stores", "env-override", "testability", "no-pollution"),
     "verify_eva_phase84_gemini_free_tier.py": ("phase84", "llm", "gemini", "rate-limits", "free-tier"),
     "verify_eva_phase85_confirm_output.py": ("phase85", "permissions", "confirmation", "approved-output", "honest-effects"),
+    "verify_eva_phase86_gate_execution.py": ("phase86", "permissions", "gate-execution", "honest-effects", "graceful-failure"),
 }
 
 

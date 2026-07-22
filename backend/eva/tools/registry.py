@@ -253,6 +253,7 @@ def _capture_screen() -> dict[str, Any]:
     output_path = data_dir / "latest_screen.jpg"
     output_path.write_bytes(image)
     return {
+        "ok": True,
         "image_path": str(output_path),
         "bytes": len(image),
         "captured_at": datetime.now(timezone.utc).isoformat(),
@@ -1722,7 +1723,16 @@ class ToolRegistry:
             return {"ok": False, "error": f"Unknown tool for pending action: {stored['tool']}."}
 
         tool_gate.pop_pending_call(pending_id)
-        return self._invoke(spec, dict(stored["args"]))
+        # Phase 86: a gated call can be missing a required arg (e.g. screen.observe
+        # without `reason`) yet still create a pending -- args_schema is never
+        # checked before gating. Approving it used to reach spec.handler(**args)
+        # and raise TypeError, an unhandled crash AFTER the user already approved.
+        # Convert that into a clean, reported failure; the normal (ungated) run
+        # path still calls _invoke directly and is unaffected.
+        try:
+            return self._invoke(spec, dict(stored["args"]))
+        except Exception as exc:
+            return {"ok": False, "error": f"execution failed: {type(exc).__name__}: {exc}"}
 
     def _invoke(self, spec: ToolSpec, args: dict[str, Any]) -> Any:
         result = spec.handler(**args)
