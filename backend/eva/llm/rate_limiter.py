@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -9,14 +10,16 @@ from uuid import uuid4
 
 STATE_PATH = Path(__file__).resolve().parents[1] / "data" / "llm_usage_state.json"
 DEFAULT_RPM = {
-    "gemini": 4,
+    # Fallback when a gemini model is not in GEMINI_MODEL_LIMITS below; the
+    # per-model table is what actually governs gemini (see provider_limits).
+    "gemini": 10,
     "groq": 30,
     "openrouter": 20,
     "nvidia_nim": 20,
     "clod": 10,
 }
 DEFAULT_RPD = {
-    "gemini": 18,
+    "gemini": 250,
     "groq": 1000,
     "openrouter": 50,
     "nvidia_nim": 300,
@@ -30,6 +33,24 @@ GROQ_MODEL_LIMITS = {
     "llama-3.1-8b-instant": {"rpm": 30, "rpd": 14400, "tpm": 6000, "tpd": 500000},
     "qwen/qwen3-32b": {"rpm": 60, "rpd": 1000, "tpm": 6000, "tpd": 500000},
 }
+# Google AI Studio FREE tier, PER API KEY. The router rate-limits each key's
+# slot ("model[keyN]") independently, so N configured keys give roughly N x
+# these. Phase 84: this replaced a flat 18-requests-per-DAY cap that throttled
+# Gemini ~80x below its real free tier. Verify current numbers at
+# https://ai.google.dev/gemini-api/docs/rate-limits -- Google adjusts them, and
+# every value is env-overridable via GEMINI_SOFT_RPM / GEMINI_SOFT_RPD. Soft
+# limits sit at/below the API's real ceiling: exceeding one only means the API
+# returns 429 and the router rotates to the next key, so being slightly
+# conservative is safe.
+GEMINI_MODEL_LIMITS = {
+    "gemini-2.5-pro": {"rpm": 5, "rpd": 100},
+    "gemini-2.5-flash": {"rpm": 10, "rpd": 250},
+    "gemini-2.5-flash-lite": {"rpm": 15, "rpd": 1000},
+    "gemini-2.0-flash": {"rpm": 15, "rpd": 1500},
+    "gemini-2.0-flash-lite": {"rpm": 30, "rpd": 1500},
+    "gemini-1.5-flash": {"rpm": 15, "rpd": 1500},
+}
+_GEMINI_DEFAULT_LIMIT = {"rpm": 10, "rpd": 250}
 
 
 def _now() -> int:
@@ -76,12 +97,27 @@ def _groq_defaults(model: str | None) -> dict[str, int]:
     return GROQ_MODEL_LIMITS.get(clean, GROQ_MODEL_LIMITS["llama-3.3-70b-versatile"])
 
 
+def _gemini_base_model(model: str | None) -> str:
+    """The base Gemini model name, with the router's per-key ``[keyN]`` slot
+    suffix stripped, so the per-model free-tier limit is looked up correctly for
+    every key slot."""
+    base = re.sub(r"\[key\d+\]$", "", str(model or "").strip())
+    return base or (os.environ.get("GEMINI_MODEL", "").strip() or "gemini-2.5-flash")
+
+
+def _gemini_defaults(model: str | None) -> dict[str, int]:
+    return GEMINI_MODEL_LIMITS.get(_gemini_base_model(model), _GEMINI_DEFAULT_LIMIT)
+
+
 def provider_limits(provider: str, model: str | None = None) -> tuple[int | None, int | None]:
     if provider == "ollama":
         return None, None
     if provider == "groq":
         defaults = _groq_defaults(model)
         return _env_int("GROQ_SOFT_RPM", defaults["rpm"]), _env_int("GROQ_SOFT_RPD", defaults["rpd"])
+    if provider == "gemini":
+        defaults = _gemini_defaults(model)
+        return _env_int("GEMINI_SOFT_RPM", defaults["rpm"]), _env_int("GEMINI_SOFT_RPD", defaults["rpd"])
     prefix = provider.upper()
     return _env_int(f"{prefix}_SOFT_RPM", DEFAULT_RPM.get(provider, 20)), _env_int(f"{prefix}_SOFT_RPD", _default_rpd(provider))
 

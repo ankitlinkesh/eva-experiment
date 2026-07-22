@@ -119,6 +119,7 @@ FULL_VERIFIERS = [
     "verify_eva_phase81_vault_diagnostics.py",
     "verify_eva_phase82_close_app_friction.py",
     "verify_eva_phase83_store_path_overrides.py",
+    "verify_eva_phase84_gemini_free_tier.py",
 ]
 
 QUICK_VERIFIERS = [
@@ -213,6 +214,7 @@ QUICK_VERIFIERS = [
     "verify_eva_phase81_vault_diagnostics.py",
     "verify_eva_phase82_close_app_friction.py",
     "verify_eva_phase83_store_path_overrides.py",
+    "verify_eva_phase84_gemini_free_tier.py",
 ]
 
 VERIFIERS = FULL_VERIFIERS
@@ -271,6 +273,7 @@ _VERIFIER_TAG_OVERRIDES = {
     "verify_eva_phase81_vault_diagnostics.py": ("phase81", "vault", "dpapi", "error-swallow-audit", "diagnosability"),
     "verify_eva_phase82_close_app_friction.py": ("phase82", "security", "close-app", "friction", "desktop"),
     "verify_eva_phase83_store_path_overrides.py": ("phase83", "stores", "env-override", "testability", "no-pollution"),
+    "verify_eva_phase84_gemini_free_tier.py": ("phase84", "llm", "gemini", "rate-limits", "free-tier"),
 }
 
 
